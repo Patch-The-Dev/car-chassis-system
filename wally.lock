@@ -10,7 +10,7 @@ dependencies = []
 [[package]]
 name = "mon-pc/cardev"
 version = "0.1.0"
-dependencies = [["Knit", "sleitnick/knit@1.7.0"]]
+dependencies = [["Knit", "sleitnick/knit@1.7.0"], ["Trove", "sleitnick/trove@1.4.0"]]
 
 [[package]]
 name = "sleitnick/comm"
@@ -30,4 +30,9 @@ dependencies = []
 [[package]]
 name = "sleitnick/signal"
 version = "2.0.1"
+dependencies = []
+
+[[package]]
+name = "sleitnick/trove"
+version = "1.4.0"
 dependencies = []

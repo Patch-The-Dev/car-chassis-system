@@ -6,11 +6,11 @@ local RS = game:GetService("ReplicatedStorage")
 local RUNS = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Assets = RS:WaitForChild("Assets")
-local Trove = require(script.Parent.Parent:WaitForChild("Libs"):WaitForChild("Trove"))
+local Trove = require(RS:WaitForChild("Packages"):WaitForChild("Trove"))
 
 function Camera:New()
 	local self = setmetatable({},Camera)
-	self._Trove = Trove.new()
+	self.trove = Trove.new()
 	return self
 end
 
@@ -25,18 +25,16 @@ function Camera:StartSpeedlines()
 				local cameraPosition = cameraCFrame.Position
 				local cameraLookVector = cameraCFrame.LookVector
 		
-				local offsetPosition = cameraPosition + (cameraLookVector * 5)
+				local offsetPosition = cameraPosition + (cameraLookVector * 10)
 		
 				Speedlines.CFrame = CFrame.new(offsetPosition, cameraPosition)
 	end)
 
-	self._Trove:Add(Speedlines)
-	self._Trove:Add(Connection)
 
 end
 
-function Camera:Destroy()
-	self._Trove:Destroy()
+function Camera:DestroySpeedlines()
+	game.Players.LocalPlayer.Character:FindFirstChild("Speedlines"):Destroy()
 end
 
 

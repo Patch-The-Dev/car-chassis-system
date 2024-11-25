@@ -23,17 +23,16 @@ function VehicleVisuals:AdjustGear(Gear,BackBumper,Amount,MaxSpeed,CamShake,Exha
 				local Vehicle = BackBumper.Parent.Parent
 				Vehicle:SetAttribute("Gear",i)
 				print(i)
-
-				-- Sound or visual effects here
-
-				--if i > 2 and i < 5 then
-				--	VehicleVisuals:ExhaustPop(Trim,ExhaustSound)
-				--end
-
 				if i > 3 then
 					VehicleVisuals:SimulateSpeed(BackBumper,true,CamShake)
+
+					if i > 4 then
+						VehicleVisuals:ToggleSpeedlines(true)
+					end
+
 				else
 					VehicleVisuals:SimulateSpeed(BackBumper,false,CamShake)
+					VehicleVisuals:ToggleSpeedlines(false)
 				end
 
 			end
@@ -42,8 +41,6 @@ function VehicleVisuals:AdjustGear(Gear,BackBumper,Amount,MaxSpeed,CamShake,Exha
 end
 
 function VehicleVisuals:SimulateSpeed(BackBumper,Toggle,CamShake) -- checks the vehicle's back bumper that's gonna have all of the particle effects that beautifies going fast
-
-	BackBumper:FindFirstChildWhichIsA("ParticleEmitter").Enabled = Toggle
 
 	if Toggle == true then
 
@@ -80,10 +77,20 @@ function VehicleVisuals:SimulateNitro(Trim, Toggle, CamShake)
 	if Toggle == true then
 		CamShake:Start()
 		CamShake:ShakeSustain(CameraShaker.Presets.Bump)
+		VehicleVisuals:ToggleSpeedlines(true)
 	else
 		CamShake:StopSustained(1)
+		VehicleVisuals:ToggleSpeedlines(false)
 	end
 
+end
+
+function VehicleVisuals:ToggleSpeedlines(Toggle)
+	local Char = game.Players.LocalPlayer.Character
+	local Speedlines = Char:FindFirstChild("Speedlines")
+	if Speedlines then
+		Speedlines.ParticleEmitter.Enabled = Toggle
+	end
 end
 
 function VehicleVisuals:AdjustFOV(Mph,MaxSpeed)
