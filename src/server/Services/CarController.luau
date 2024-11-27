@@ -1,3 +1,4 @@
+local LocalizationService = game:GetService("LocalizationService")
 local Knit = require(game:GetService("ReplicatedStorage").Packages.Knit)
 
 -- Create the service:
@@ -23,24 +24,43 @@ function CarControllerService.Client:ToggleFrontlights(Player, Car, Toggle)
 	end
 end
 
-function CarControllerService.Client:ToggleNitro(Player, Car, Toggle)
-	
-	local TorqueAmount = 1
-	local SteerAmount = 1
-	
-	if Toggle == true then
-		TorqueAmount = 2
-		SteerAmount = 1/4
+function CarControllerService.Client:AdjustNitro(Player,Car,Toggle)
 
+	if Toggle == true then
+		if Car:GetAttribute("Nitro") > 0 then
+			Car:SetAttribute("Nitro",Car:GetAttribute("Nitro")-1)
+		end
+		if Car:GetAttribute("DrivingTorque") ~= Car:GetAttribute("NitroTorque") then
+			Car:SetAttribute("DrivingTorque",Car:GetAttribute("NitroTorque"))
+			Car:SetAttribute("MaxSteer",Car:GetAttribute("NitroSteer"))
+		end
 	else
-		TorqueAmount = 1/2
-		SteerAmount = 4
+		if Car:GetAttribute("Nitro") < 100 then
+			if Car:GetAttribute("DrivingTorque") == Car:GetAttribute("NitroTorque") then
+				Car:SetAttribute("DrivingTorque",15000)
+				Car:SetAttribute("MaxSteer",15)
+			else
+				Car:SetAttribute("Nitro",Car:GetAttribute("Nitro")+1)
+			end
+		end
 	end
-	
-	Car:SetAttribute("DrivingTorque",Car:GetAttribute("DrivingTorque")*TorqueAmount)
-	Car:SetAttribute("MaxSteer",Car:GetAttribute("MaxSteer")*SteerAmount)
 
 end
+
+function CarControllerService.Client:ToggleDrift(Player, Car, Toggle)
+	print("Drifting")
+	if Toggle == true then
+		Car:SetAttribute("BrakingTorque",2000)
+		Car:SetAttribute("DrivingTorque",6000)
+		Car:SetAttribute("MaxSteer",200)
+		Car:SetAttribute("WheelFriction",0.25)
+	else
+		Car:SetAttribute("DrivingTorque",15000)
+		Car:SetAttribute("MaxSteer",15)
+		Car:SetAttribute("WheelFriction",3)
+	end
+end
+
 
 
 return CarControllerService

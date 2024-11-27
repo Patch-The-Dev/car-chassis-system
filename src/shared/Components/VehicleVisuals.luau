@@ -85,6 +85,37 @@ function VehicleVisuals:SimulateNitro(Trim, Toggle, CamShake)
 
 end
 
+function VehicleVisuals:SimulateDrift(Trim,Bumper,Toggle)
+	local DriftSFX = Trim:WaitForChild("Drift")
+	local LeftTireSmoke =  Bumper:WaitForChild("DriftAttLeft"):WaitForChild("Smoke Particle")
+	local RightTireSmoke =  Bumper:WaitForChild("DriftAttRight"):WaitForChild("Smoke Particle")
+
+	if Toggle == true then
+		DriftSFX:Play()
+		LeftTireSmoke.Enabled = true
+		RightTireSmoke.Enabled = true
+
+		for i,v in Bumper:GetChildren() do
+			if v:IsA("Trail") then
+				v.Enabled = true
+			end
+		end
+
+	else
+		DriftSFX:Stop()
+		LeftTireSmoke.Enabled = false
+		RightTireSmoke.Enabled = false
+
+		for i,v in Bumper:GetChildren() do
+			if v:IsA("Trail") then
+				v.Enabled = false
+			end
+		end
+
+	end
+
+end
+
 function VehicleVisuals:ToggleSpeedlines(Toggle)
 	local Char = game.Players.LocalPlayer.Character
 	local Speedlines = Char:FindFirstChild("Speedlines")
