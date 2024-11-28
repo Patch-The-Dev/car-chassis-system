@@ -24,7 +24,7 @@ function CarControllerService.Client:ToggleFrontlights(Player, Car, Toggle)
 	end
 end
 
-function CarControllerService.Client:AdjustNitro(Player,Car,Toggle)
+function CarControllerService.Client:AdjustNitro(Player,Car,Toggle,LSToggle)
 
 	if Toggle == true then
 		if Car:GetAttribute("Nitro") > 0 then
@@ -39,7 +39,8 @@ function CarControllerService.Client:AdjustNitro(Player,Car,Toggle)
 			if Car:GetAttribute("DrivingTorque") == Car:GetAttribute("NitroTorque") then
 				Car:SetAttribute("DrivingTorque",15000)
 				Car:SetAttribute("MaxSteer",15)
-			else
+			end
+			if LSToggle == false then
 				Car:SetAttribute("Nitro",Car:GetAttribute("Nitro")+1)
 			end
 		end
@@ -50,8 +51,8 @@ end
 function CarControllerService.Client:ToggleDrift(Player, Car, Toggle)
 	print("Drifting")
 	if Toggle == true then
-		Car:SetAttribute("BrakingTorque",2000)
-		Car:SetAttribute("DrivingTorque",6000)
+		Car:SetAttribute("BrakingTorque",4000)
+		Car:SetAttribute("DrivingTorque",4000)
 		Car:SetAttribute("MaxSteer",200)
 		Car:SetAttribute("WheelFriction",0.25)
 	else

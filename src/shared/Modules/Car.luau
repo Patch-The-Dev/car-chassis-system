@@ -49,8 +49,8 @@ function Car:ToggleNitro(Toggle,CamShake)
 	end
 end
 
-function Car:AdjustNitro(Toggle,UIGradient)
-	CarControllerService:AdjustNitro(self.Instance,Toggle)
+function Car:AdjustNitro(Toggle,UIGradient,LSToggle)
+	CarControllerService:AdjustNitro(self.Instance,Toggle,LSToggle)
 	GuiVisualizer:GradientProgressBar(UIGradient,100,self.Instance:GetAttribute("Nitro"))
 end
 

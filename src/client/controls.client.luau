@@ -21,12 +21,15 @@ end)
 local LightToggle = false
 local NitroOn = false
 local Nitrodb = false
+local lastNitroTime = 0
 
 UIS.InputBegan:Connect(function(Input,Processed)
 
     --print(workspace.CurrentCamera.CFrame)
 
 	--if Processed then return end
+
+	if Car:WaitForChild("Chassis").VehicleSeat.Occupant == nil then return end
 
 	if Input.KeyCode == Enum.KeyCode.H then -- Horn
 		Vehicle:Honk(true)
@@ -44,9 +47,12 @@ UIS.InputBegan:Connect(function(Input,Processed)
 	end
 
 	if Input.KeyCode == Enum.KeyCode.LeftShift then -- Nitro
-		Vehicle:ToggleNitro(true,camShake)
-        CarControlBase.BoostButton.UIGradient.Enabled = true
-		NitroOn = true
+        if not NitroOn and Car:GetAttribute("Nitro") > 2 then
+            Vehicle:ToggleNitro(true, camShake)
+            CarControlBase.BoostButton.UIGradient.Enabled = true
+            NitroOn = true
+            Nitrodb = true
+        end
 	end
 
 	
@@ -60,6 +66,8 @@ end)
 
 UIS.InputEnded:Connect(function(Input,Processed)
 
+	if Car:WaitForChild("Chassis").VehicleSeat.Occupant == nil then return end
+
 	--if Processed then return end
 
 	if Input.KeyCode == Enum.KeyCode.H then -- Horn
@@ -72,16 +80,14 @@ UIS.InputEnded:Connect(function(Input,Processed)
 	end
 	
 	if Input.KeyCode == Enum.KeyCode.LeftShift then -- Nitro
-		Vehicle:ToggleNitro(false,camShake)
-		Vehicle:AdjustNitro(false,NitroGradient)
-        CarControlBase.BoostButton.UIGradient.Enabled = false
+		Vehicle:ToggleNitro(false, camShake)
+		Vehicle:AdjustNitro(false, NitroGradient,true)
+		CarControlBase.BoostButton.UIGradient.Enabled = false
 		NitroOn = false
-		Nitrodb = true
-		Wait(3)
-		Nitrodb = false
+		lastNitroTime = tick() -- Record the time Nitro was deactivated
 	end
 
-    if Input.KeyCode ==  Enum.KeyCode.W then -- Exhaust Pop
+    if Input.KeyCode ==  Enum.KeyCode.W and math.random(1,3) == 1 then -- Exhaust Pop
         VehicleVisuals:ExhaustPop(Vehicle.Instance.Body["trim_grey_light"],Vehicle.Instance.Effects.Exhaust)
     end
 
@@ -94,22 +100,36 @@ end)
 
 
 -- Handles Nitro updates
+
+-- cooldown logic
+task.spawn(function()
+    while true do
+        if not NitroOn and Nitrodb and tick() - lastNitroTime >= 8 then
+            Nitrodb = false -- Cooldown resets after 8 seconds
+        end
+        task.wait(0.05)
+    end
+end)
+
 while true do
-	if NitroOn == true then
-		Wait(0.015)
-		if Car:GetAttribute("Nitro") > 0 then
-			Vehicle:AdjustNitro(true,NitroGradient)
-		else
-			Vehicle:ToggleNitro(false,camShake)
-		end
-	else
-		if Nitrodb == false then
-			Vehicle:AdjustNitro(false,NitroGradient)
-			Wait(0.015)
-		end
-	end
-	Wait(0.01)
+    if NitroOn then
+        if Car:GetAttribute("Nitro") > 0 then
+            spawn(function()
+                Vehicle:AdjustNitro(true, NitroGradient,false)
+            end)
+        else
+            -- Force disable Nitro when it reaches 0
+            Vehicle:ToggleNitro(false, camShake)
+            Vehicle:AdjustNitro(false, NitroGradient,false)
+            CarControlBase.BoostButton.UIGradient.Enabled = false
+            NitroOn = false
+            Nitrodb = true
+            lastNitroTime = tick() -- Start cooldown
+        end
+    elseif not Nitrodb then
+        Vehicle:AdjustNitro(false, NitroGradient, false)
+    end
+    task.wait(0.03)
 end
 
 --end)
-
