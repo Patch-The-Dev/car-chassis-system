@@ -1,0 +1,42 @@
+name: Source checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned tools
+        uses: paradoxum-games/setup-rokit@v3
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Check formatting
+        run: stylua --check src tests
+
+      - name: Lint
+        run: selene src tests
+
+      - name: Type check all runtime source
+        run: |
+          rojo sourcemap default.project.json --include-non-scripts -o sourcemap.json
+          curl -fsSL https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/1.70.0/scripts/globalTypes.d.luau -o "$RUNNER_TEMP/robloxTypes.d.luau"
+          echo "2b0df788dc3fd1b572e71ee7fe9e1c55cc23882afbd5024aecdec30d9bd7520f  $RUNNER_TEMP/robloxTypes.d.luau" | sha256sum --check
+          luau-lsp analyze --platform roblox --sourcemap sourcemap.json \
+            --definitions "@roblox=$RUNNER_TEMP/robloxTypes.d.luau" src
+
+      - name: Build chassis project
+        run: rojo build default.project.json -o CarChassisSystem.rbxlx
+
+      - name: Build isolated test project
+        run: rojo build test.project.json -o CarChassisTests.rbxlx

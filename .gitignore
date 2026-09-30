@@ -1,6 +1,9 @@
-# Project place file
-/CarDev.rbxlx
-
-# Roblox Studio lock files
-/*.rbxlx.lock
+# Generated places and editor state
+/*.rbxl
+/*.rbxlx
 /*.rbxl.lock
+/*.rbxlx.lock
+/sourcemap.json
+
+# No runtime packages are required by the chassis.
+/Packages/

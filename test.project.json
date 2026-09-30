@@ -1,0 +1,13 @@
+{
+  "name": "CarChassisTests",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "ChassisShared": { "$path": "src/shared" }
+    },
+    "ServerScriptService": {
+      "VehicleChassis": { "$path": "src/server/VehicleChassis.luau" },
+      "Fixture": { "$path": "tests/Fixture.luau" }
+    }
+  }
+}
