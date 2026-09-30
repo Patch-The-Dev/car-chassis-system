@@ -1,15 +1,30 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+local ServerStorage = game:GetService("ServerStorage")
+local CollectionService = game:GetService("CollectionService")
 
 local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
 local InputPolicy = require(ReplicatedStorage.ChassisShared.InputPolicy)
 local Fixture = require(ServerScriptService.Fixture)
 local VehicleChassis = require(ServerScriptService.VehicleChassis)
+local ChassisRegistry = require(ServerScriptService.ChassisRegistry)
 
 local cases = 0
 local function check(condition, message)
 	cases += 1
 	assert(condition, message)
+end
+
+local function eventually(predicate, message)
+	local deadline = os.clock() + 3
+	repeat
+		if predicate() then
+			check(true, message)
+			return
+		end
+		task.wait()
+	until os.clock() >= deadline
+	check(false, message)
 end
 
 local throttle, steer, brake = InputPolicy.sanitize(2, -2, true)
@@ -30,6 +45,15 @@ end), "missing wheel should fail before changing the model")
 check(invalid:FindFirstChild("ChassisRuntime") == nil, "invalid model should remain untouched")
 invalid:Destroy()
 
+local invalidTuning = table.clone(Config)
+invalidTuning.DriveTorque = -1
+local untouched = Fixture.create()
+check(not pcall(function()
+	VehicleChassis.new(untouched, invalidTuning)
+end), "invalid tuning is rejected before assembly")
+check(untouched:FindFirstChild("ChassisRuntime") == nil, "invalid tuning leaves the model untouched")
+untouched:Destroy()
+
 local car = Fixture.create()
 local chassis = VehicleChassis.new(car)
 chassis:Start()
@@ -38,7 +62,7 @@ local runtime = car:FindFirstChild("ChassisRuntime")
 check(runtime ~= nil, "runtime should be installed once")
 check(not car.DriveSeat.Anchored, "drive seat should unanchor after assembly")
 
-local counts = { SpringConstraint = 0, PrismaticConstraint = 0, HingeConstraint = 0 }
+local counts = { SpringConstraint = 0, PrismaticConstraint = 0, HingeConstraint = 0, NoCollisionConstraint = 0 }
 for _, instance in runtime:GetDescendants() do
 	if counts[instance.ClassName] then
 		counts[instance.ClassName] += 1
@@ -47,6 +71,7 @@ end
 check(counts.SpringConstraint == 4, "one spring per wheel")
 check(counts.PrismaticConstraint == 4, "one suspension guide per wheel")
 check(counts.HingeConstraint == 6, "four motors and two steering hinges")
+check(counts.NoCollisionConstraint == 8, "each tire is separated from the seat and collidable body")
 
 chassis:Step(os.clock())
 check(chassis.motors.FL.AngularVelocity == 0, "an empty vehicle must not drive")
@@ -62,6 +87,108 @@ chassis:Start()
 check(car:FindFirstChild("ChassisRuntime") ~= nil, "a detached chassis should start again cleanly")
 chassis:Destroy()
 car:Destroy()
+
+local function checkDriveMode(drivetrain)
+	local tuning = table.clone(Config)
+	tuning.Drivetrain = drivetrain
+	local vehicle = Fixture.create()
+	local controller = VehicleChassis.new(vehicle, tuning)
+	controller:Start()
+	controller.driver = {} -- Drive output is tested independently of the seat authentication path.
+	controller.throttle = 1
+	controller.steer = 0.5
+	controller.handbrake = false
+	controller.lastInput = 100
+	controller.inputDirty = true
+	controller:Step(100.05)
+	for name, motor in controller.motors do
+		local driven = InputPolicy.isDriven(name, drivetrain)
+		check(
+			motor.MotorMaxTorque == (if driven then tuning.DriveTorque / (if drivetrain == "AWD" then 4 else 2) else 0),
+			`{drivetrain} torque on {name}`
+		)
+		check((motor.AngularVelocity ~= 0) == driven, `{drivetrain} wheel speed on {name}`)
+	end
+	check(controller.steering.FL.TargetAngle == -tuning.SteerAngle * 0.5, "steering follows input")
+	controller.handbrake = true
+	controller.inputDirty = true
+	controller:Step(100.1)
+	for _, motor in controller.motors do
+		check(motor.AngularVelocity == 0, "handbrake overrides throttle")
+		check(motor.MotorMaxTorque == tuning.BrakeTorque / 4, "handbrake applies braking torque")
+	end
+	controller:Step(101)
+	check(controller.steering.FL.TargetAngle == 0, "stale steering returns to center")
+	check(controller.motors.FL.AngularVelocity == 0, "stale input returns to neutral")
+	controller:Destroy()
+	vehicle:Destroy()
+end
+
+checkDriveMode("AWD")
+checkDriveMode("FWD")
+checkDriveMode("RWD")
+
+local shared = ReplicatedStorage.ChassisShared
+local invalidRemotes = Instance.new("Part")
+invalidRemotes.Name = "Remotes"
+invalidRemotes.Parent = shared
+check(not pcall(function()
+	ChassisRegistry.new():Start()
+end), "incorrect remote namespace class is rejected")
+invalidRemotes:Destroy()
+
+local registry = ChassisRegistry.new()
+registry:Start()
+registry:Start()
+check(shared.Remotes.Input:IsA("RemoteEvent"), "namespaced input remote is installed")
+local live = Fixture.create()
+CollectionService:AddTag(live, Config.Tag)
+eventually(function()
+	return registry:Get(live) ~= nil
+end, "tagging a workspace model attaches it")
+local second = Fixture.create()
+CollectionService:AddTag(second, Config.Tag)
+eventually(function()
+	return registry:Get(second) ~= nil
+end, "multiple vehicles attach independently")
+live.Parent = ServerStorage
+eventually(function()
+	return registry:Get(live) == nil and live:FindFirstChild("ChassisRuntime") == nil
+end, "leaving workspace detaches the chassis")
+live.Parent = workspace
+eventually(function()
+	return registry:Get(live) ~= nil
+end, "returning to workspace reattaches the chassis")
+CollectionService:RemoveTag(live, Config.Tag)
+eventually(function()
+	return registry:Get(live) == nil
+end, "removing the tag detaches the chassis")
+local waiting = Fixture.create(ServerStorage)
+CollectionService:AddTag(waiting, Config.Tag)
+check(registry:Get(waiting) == nil, "tagged model outside workspace waits")
+waiting.Parent = workspace
+eventually(function()
+	return registry:Get(waiting) ~= nil
+end, "pretagged model attaches when moved into workspace")
+local disposable = Fixture.create()
+CollectionService:AddTag(disposable, Config.Tag)
+eventually(function()
+	return registry:Get(disposable) ~= nil
+end, "disposable vehicle attaches")
+disposable:Destroy()
+eventually(function()
+	return registry:Get(disposable) == nil and registry.watchers[disposable] == nil
+end, "destroyed tagged model releases its watcher")
+registry:Stop()
+check(registry:Get(second) == nil and registry:Get(waiting) == nil, "registry stop detaches every vehicle")
+local reusedRemote = shared.Remotes.Input
+local restartedRegistry = ChassisRegistry.new()
+restartedRegistry:Start()
+check(shared.Remotes.Input == reusedRemote, "new registry reuses the namespaced remote")
+restartedRegistry:Stop()
+live:Destroy()
+second:Destroy()
+waiting:Destroy()
 
 print(`{cases} passed, 0 failed`)
 print("CAR_CHASSIS_TESTS_PASS")

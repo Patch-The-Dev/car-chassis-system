@@ -6,7 +6,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
-local remote = ReplicatedStorage:WaitForChild("ChassisInput") :: RemoteEvent
+local remote =
+	ReplicatedStorage:WaitForChild("ChassisShared"):WaitForChild("Remotes"):WaitForChild("Input") :: RemoteEvent
 local player = Players.LocalPlayer
 
 local generation = 0

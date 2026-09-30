@@ -7,6 +7,7 @@
     },
     "ServerScriptService": {
       "VehicleChassis": { "$path": "src/server/VehicleChassis.luau" },
+      "ChassisRegistry": { "$path": "src/server/ChassisRegistry.luau" },
       "Fixture": { "$path": "tests/Fixture.luau" }
     }
   }

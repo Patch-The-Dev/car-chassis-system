@@ -2,7 +2,7 @@
 
 local Fixture = {}
 
-function Fixture.create(): Model
+function Fixture.create(parent: Instance?): Model
 	local car = Instance.new("Model")
 	car.Name = "TestVehicle"
 
@@ -41,7 +41,7 @@ function Fixture.create(): Model
 		wheel.Parent = wheels
 	end
 
-	car.Parent = workspace
+	car.Parent = parent or workspace
 	return car
 end
 

@@ -1,0 +1,188 @@
+--!strict
+
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
+local VehicleChassis = require(script.Parent.VehicleChassis)
+
+type State = {
+	active: { [Model]: VehicleChassis.Chassis },
+	watchers: { [Model]: { RBXScriptConnection } },
+	connections: { RBXScriptConnection },
+	started: boolean,
+}
+
+local ChassisRegistry = {}
+ChassisRegistry.__index = ChassisRegistry
+export type Registry = typeof(setmetatable({} :: State, ChassisRegistry))
+
+local function getOrCreate(parent: Instance, name: string, className: string): Instance
+	local found: Instance? = nil
+	for _, child in parent:GetChildren() do
+		if child.Name == name then
+			if found then
+				error(`{parent:GetFullName()} has multiple children named {name}`)
+			end
+			found = child
+		end
+	end
+	if found then
+		if found.ClassName ~= className then
+			error(`{found:GetFullName()} must be a {className}`)
+		end
+		return found
+	end
+	local created = Instance.new(className)
+	created.Name = name
+	created.Parent = parent
+	return created
+end
+
+function ChassisRegistry.new(): Registry
+	return setmetatable({ active = {}, watchers = {}, connections = {}, started = false } :: State, ChassisRegistry)
+end
+
+function ChassisRegistry.Get(self: Registry, model: Model): VehicleChassis.Chassis?
+	return self.active[model]
+end
+
+function ChassisRegistry._detach(self: Registry, model: Model): ()
+	local chassis = self.active[model]
+	if chassis then
+		self.active[model] = nil
+		chassis:Destroy()
+	end
+end
+
+function ChassisRegistry._reconcile(self: Registry, model: Model): ()
+	if not self.started or not CollectionService:HasTag(model, Config.Tag) or not model:IsDescendantOf(workspace) then
+		self:_detach(model)
+		return
+	end
+	if self.active[model] then
+		return
+	end
+	local success, result = pcall(function()
+		local chassis = VehicleChassis.new(model)
+		chassis:Start()
+		return chassis
+	end)
+	if success then
+		self.active[model] = result
+	else
+		warn(`[Car Chassis] Could not initialize {model:GetFullName()}: {result}`)
+	end
+end
+
+function ChassisRegistry._watch(self: Registry, instance: Instance): ()
+	if not instance:IsA("Model") then
+		return
+	end
+	local model = instance
+	if not self.watchers[model] then
+		self.watchers[model] = {
+			model.AncestryChanged:Connect(function()
+				self:_reconcile(model)
+			end),
+			model.Destroying:Connect(function()
+				self:_forget(model)
+			end),
+		}
+	end
+	self:_reconcile(model)
+end
+
+function ChassisRegistry._forget(self: Registry, model: Model): ()
+	self:_detach(model)
+	local watchers = self.watchers[model]
+	if watchers then
+		for _, watcher in watchers do
+			watcher:Disconnect()
+		end
+		self.watchers[model] = nil
+	end
+end
+
+function ChassisRegistry._unwatch(self: Registry, instance: Instance): ()
+	if not instance:IsA("Model") then
+		return
+	end
+	local model = instance
+	if not CollectionService:HasTag(model, Config.Tag) then
+		self:_forget(model)
+	else
+		self:_detach(model)
+	end
+end
+
+function ChassisRegistry.Start(self: Registry): ()
+	if self.started then
+		return
+	end
+	local shared = ReplicatedStorage:WaitForChild("ChassisShared")
+	local remotes = getOrCreate(shared, "Remotes", "Folder")
+	local remote = getOrCreate(remotes, "Input", "RemoteEvent") :: RemoteEvent
+	self.started = true
+	table.insert(
+		self.connections,
+		CollectionService:GetInstanceAddedSignal(Config.Tag):Connect(function(instance)
+			self:_watch(instance)
+		end)
+	)
+	table.insert(
+		self.connections,
+		CollectionService:GetInstanceRemovedSignal(Config.Tag):Connect(function(instance)
+			self:_unwatch(instance)
+		end)
+	)
+	for _, instance in CollectionService:GetTagged(Config.Tag) do
+		self:_watch(instance)
+	end
+	table.insert(
+		self.connections,
+		remote.OnServerEvent:Connect(function(player, model, throttle, steer, brake)
+			if typeof(model) ~= "Instance" or not model:IsA("Model") then
+				return
+			end
+			local chassis = self.active[model]
+			if chassis then
+				chassis:ApplyInput(player, throttle, steer, brake, os.clock())
+			end
+		end)
+	)
+	table.insert(
+		self.connections,
+		RunService.Heartbeat:Connect(function()
+			local now = os.clock()
+			for _, chassis in self.active do
+				chassis:Step(now)
+			end
+		end)
+	)
+end
+
+function ChassisRegistry.Stop(self: Registry): ()
+	self.started = false
+	for _, connection in self.connections do
+		connection:Disconnect()
+	end
+	table.clear(self.connections)
+	local models = {}
+	for model in self.active do
+		table.insert(models, model)
+	end
+	for _, model in models do
+		self:_detach(model)
+	end
+	local watchedModels = {}
+	for model in self.watchers do
+		table.insert(watchedModels, model)
+	end
+	for _, model in watchedModels do
+		self:_forget(model)
+	end
+end
+
+return ChassisRegistry
