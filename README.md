@@ -81,6 +81,17 @@ On Windows, run both Studio suites with an installed, signed-in Roblox Studio:
 
 The runner builds an isolated test place. Its fixture is test data and is excluded from the main project.
 
+### Verification approach
+
+This repository uses automatic GitHub source checks and local Roblox Studio execution. Run both Studio suites before publishing changes to assembly, constraints, input validation, ownership, or vehicle lifecycle code, and retain the report for the tested source commit.
+
+| Verification | Execution and evidence |
+| --- | --- |
+| Source checks | GitHub Actions runs on `master` pushes and pull requests; results appear in the workflow history. |
+| Runtime suites | Run locally in Studio with actual vehicle constraints and two clients; [validation.json](docs/validation.json) records the tested commit, completion time, results, and fleet measurements. |
+
+Studio runtime CI is optional. The default verification approach uses the local suites documented here. The recorded Studio results apply to their named source revision; each runtime change needs a fresh run.
+
 | Suite | Coverage |
 | --- | --- |
 | Structural | Missing and duplicate model parts, invalid tuning, constraint construction, all three drivetrains, handbraking, stale input, recursive tuning isolation, tire properties, Ackermann geometry, ground-speed steering, collision separation, model lifecycle, a 50-vehicle parked scheduling check, and teardown. |
@@ -88,7 +99,7 @@ The runner builds an isolated test place. Its fixture is test data and is exclud
 
 The [recorded local Studio run](docs/validation.json) passed **162 structural checks** and **46 multiplayer checks** from a clean source commit. It includes the 100-vehicle parked fleet timings, tested commit, and completion time. The Studio workflow generates a fresh report for each automated run.
 
-[Source checks](.github/workflows/ci.yml) run formatting, lint, all runtime source with Luau analysis, and both Rojo builds in GitHub Actions. The optional [Studio runtime workflow](.github/workflows/studio.yml) executes both suites on a dedicated Windows runner and uploads their results. It is disabled until that runner is configured and explicitly enabled. See [Studio CI setup and execution rules](docs/STUDIO_CI.md).
+[Source checks](.github/workflows/ci.yml) run formatting, lint, all runtime source with Luau analysis, and both Rojo builds in GitHub Actions. The optional [Studio runtime workflow](.github/workflows/studio.yml) can automate the same suites when a Windows runner is configured and enabled. It is currently disabled. A skipped job records no runtime execution; the local results above remain the recorded Studio evidence. See [verification policy and optional Studio CI setup](docs/STUDIO_CI.md).
 
 ## Design boundaries
 
