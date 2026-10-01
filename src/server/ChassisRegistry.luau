@@ -174,9 +174,37 @@ function ChassisRegistry._unwatch(self: Registry, instance: Instance): ()
 	end
 end
 
+function ChassisRegistry._receiveInput(
+	self: Registry,
+	player: Player,
+	model: unknown,
+	throttle: unknown,
+	steer: unknown,
+	brake: unknown,
+	now: number
+): boolean
+	local lastInput = self.lastRemoteInput[player]
+	if lastInput and now - lastInput < Config.RemoteRateLimit then
+		return false
+	end
+	self.lastRemoteInput[player] = now
+	if typeof(model) ~= "Instance" or not model:IsA("Model") then
+		return false
+	end
+	local chassis = self.active[model]
+	return if chassis then chassis:ApplyInput(player, throttle, steer, brake, now) else false
+end
+
 function ChassisRegistry.Start(self: Registry): ()
 	if self.started then
 		return
+	end
+	if
+		Config.RemoteRateLimit <= 0
+		or Config.RemoteRateLimit ~= Config.RemoteRateLimit
+		or Config.RemoteRateLimit == math.huge
+	then
+		error("ChassisConfig.RemoteRateLimit must be finite and positive")
 	end
 	local shared = ReplicatedStorage:WaitForChild("ChassisShared")
 	local remotes = getOrCreate(shared, "Remotes", "Folder")
@@ -206,19 +234,7 @@ function ChassisRegistry.Start(self: Registry): ()
 	table.insert(
 		self.connections,
 		remote.OnServerEvent:Connect(function(player, model, throttle, steer, brake)
-			local now = os.clock()
-			local lastInput = self.lastRemoteInput[player]
-			if lastInput and now - lastInput < Config.InputRateLimit then
-				return
-			end
-			self.lastRemoteInput[player] = now
-			if typeof(model) ~= "Instance" or not model:IsA("Model") then
-				return
-			end
-			local chassis = self.active[model]
-			if chassis then
-				chassis:ApplyInput(player, throttle, steer, brake, now)
-			end
+			self:_receiveInput(player, model, throttle, steer, brake, os.clock())
 		end)
 	)
 	table.insert(

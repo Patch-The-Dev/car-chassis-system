@@ -1,4 +1,7 @@
-local result = game:GetService("StudioTestService"):ExecutePlayModeAsync("CarChassisIntegration")
+local runId = game:GetService("HttpService"):GenerateGUID(false)
+print(`CAR_CHASSIS_RUN_ID:{runId}`)
+local result = game:GetService("StudioTestService")
+	:ExecuteMultiplayerTestAsync(2, { suite = "CarChassisIntegration", runId = runId })
 assert(type(result) == "table", "Studio returned no integration result")
 assert(result.error == nil, result.error)
 print(`{result.passed} integration checks passed`)

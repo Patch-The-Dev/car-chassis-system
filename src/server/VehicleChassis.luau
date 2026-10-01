@@ -5,7 +5,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
 local ConfigCopy = require(ReplicatedStorage.ChassisShared.ConfigCopy)
+local ConfigTree = require(ReplicatedStorage.ChassisShared.ConfigTree)
 local InputPolicy = require(ReplicatedStorage.ChassisShared.InputPolicy)
+local SteeringGeometry = require(ReplicatedStorage.ChassisShared.SteeringGeometry)
 
 local WHEEL_NAMES = { "FL", "FR", "RL", "RR" }
 local WHEEL_BODY_MARGIN = 0.5
@@ -17,6 +19,7 @@ type State = {
 	body: Model,
 	mass: number,
 	wheelbase: number,
+	trackWidth: number,
 	wheels: { [string]: BasePart },
 	created: { Instance },
 	anchors: { [BasePart]: boolean },
@@ -40,8 +43,21 @@ local VehicleChassis = {}
 VehicleChassis.__index = VehicleChassis
 export type Chassis = typeof(setmetatable({} :: State, VehicleChassis))
 
+local function uniqueChild(parent: Instance, name: string): Instance?
+	local found: Instance? = nil
+	for _, child in parent:GetChildren() do
+		if child.Name == name then
+			if found then
+				error(`{parent:GetFullName()} has multiple children named {name}`)
+			end
+			found = child
+		end
+	end
+	return found
+end
+
 local function expectPart(parent: Instance, name: string): BasePart
-	local child = parent:FindFirstChild(name)
+	local child = uniqueChild(parent, name)
 	if not child or not child:IsA("BasePart") then
 		error(`{parent:GetFullName()} requires a BasePart named {name}`)
 	end
@@ -87,6 +103,13 @@ local function requireFinite(name: string, value: unknown, minimum: number): ()
 	end
 end
 
+local function requireRange(name: string, value: unknown, minimum: number, maximum: number): ()
+	requireFinite(name, value, minimum)
+	if typeof(value) == "number" and value > maximum then
+		error(`ChassisConfig.{name} must be at most {maximum}`)
+	end
+end
+
 local function validateSuspension(axle: string, suspension: typeof(Config.Suspension.Front)): ()
 	requireFinite(`Suspension.{axle}.Stiffness`, suspension.Stiffness, 0)
 	requireFinite(`Suspension.{axle}.Damping`, suspension.Damping, 0)
@@ -103,6 +126,9 @@ local function validateConfig(config: typeof(Config)): ()
 	if config.Drivetrain ~= "AWD" and config.Drivetrain ~= "FWD" and config.Drivetrain ~= "RWD" then
 		error("ChassisConfig.Drivetrain must be AWD, FWD, or RWD")
 	end
+	if config.NetworkOwnership ~= "Driver" and config.NetworkOwnership ~= "Server" then
+		error("ChassisConfig.NetworkOwnership must be Driver or Server")
+	end
 	requireFinite("InputTimeout", config.InputTimeout, 0.000001)
 	requireFinite("InputRateLimit", config.InputRateLimit, 0.000001)
 	requireFinite("MaxForwardSpeed", config.MaxForwardSpeed, 0)
@@ -113,10 +139,15 @@ local function validateConfig(config: typeof(Config)): ()
 	requireFinite("DriveTorque", config.DriveTorque, 0)
 	requireFinite("CoastTorque", config.CoastTorque, 0)
 	requireFinite("BrakeTorque", config.BrakeTorque, 0)
-	requireFinite("SteerAngle", config.SteerAngle, 0)
+	requireRange("SteerAngle", config.SteerAngle, 0, 89)
 	requireFinite("SteerAngularSpeed", config.SteerAngularSpeed, 0)
 	requireFinite("SteerTorque", config.SteerTorque, 0)
-	requireFinite("WheelDensity", config.WheelDensity, 0.000001)
+	requireRange("AckermannRatio", config.AckermannRatio, 0, 1)
+	requireRange("WheelDensity", config.WheelDensity, 0.01, 100)
+	requireRange("Tires.Friction", config.Tires.Friction, 0, 2)
+	requireRange("Tires.Elasticity", config.Tires.Elasticity, 0, 1)
+	requireRange("Tires.FrictionWeight", config.Tires.FrictionWeight, 0, 100)
+	requireRange("Tires.ElasticityWeight", config.Tires.ElasticityWeight, 0, 100)
 	if config.InputRateLimit >= config.InputTimeout then
 		error("ChassisConfig.InputRateLimit must be shorter than InputTimeout")
 	end
@@ -127,23 +158,20 @@ end
 function VehicleChassis.new(model: Model, config: typeof(Config)?): Chassis
 	local tune = ConfigCopy.copy(config or Config)
 	validateConfig(tune)
-	table.freeze(tune.Suspension.Front)
-	table.freeze(tune.Suspension.Rear)
-	table.freeze(tune.Suspension)
-	table.freeze(tune)
-	local seat = model:FindFirstChild("DriveSeat")
+	ConfigTree.freeze(tune)
+	local seat = uniqueChild(model, "DriveSeat")
 	if not seat or not seat:IsA("VehicleSeat") then
 		error(`{model:GetFullName()} requires a VehicleSeat named DriveSeat`)
 	end
-	local body = model:FindFirstChild("Body")
+	local body = uniqueChild(model, "Body")
 	if not body or not body:IsA("Model") then
 		error(`{model:GetFullName()} requires a Model named Body`)
 	end
-	local wheelsContainer = model:FindFirstChild("Wheels")
+	local wheelsContainer = uniqueChild(model, "Wheels")
 	if not wheelsContainer or not (wheelsContainer:IsA("Model") or wheelsContainer:IsA("Folder")) then
 		error(`{model:GetFullName()} requires a Model or Folder named Wheels`)
 	end
-	local misc = model:FindFirstChild("Misc")
+	local misc = uniqueChild(model, "Misc")
 	if misc and not (misc:IsA("Model") or misc:IsA("Folder")) then
 		error(`{model:GetFullName()} requires Misc to be a Model or Folder`)
 	end
@@ -154,9 +182,13 @@ function VehicleChassis.new(model: Model, config: typeof(Config)?): Chassis
 	end
 	local frontCenter = (wheels.FL.Position + wheels.FR.Position) / 2
 	local rearCenter = (wheels.RL.Position + wheels.RR.Position) / 2
-	local wheelbase = math.abs((frontCenter - rearCenter):Dot(seat.CFrame.LookVector))
+	local wheelbase = (frontCenter - rearCenter):Dot(seat.CFrame.LookVector)
+	local trackWidth = (wheels.FR.Position - wheels.FL.Position):Dot(seat.CFrame.RightVector)
 	if wheelbase < 0.1 then
-		error(`{model:GetFullName()} requires separated front and rear axles along the seat's forward direction`)
+		error(`{model:GetFullName()} requires its front axle ahead of its rear axle along the seat's forward direction`)
+	end
+	if trackWidth < 0.1 then
+		error(`{model:GetFullName()} requires FR to be to the right of FL along the seat's right direction`)
 	end
 	return setmetatable(
 		{
@@ -166,6 +198,7 @@ function VehicleChassis.new(model: Model, config: typeof(Config)?): Chassis
 			body = body,
 			mass = 0,
 			wheelbase = wheelbase,
+			trackWidth = trackWidth,
 			wheels = wheels,
 			created = {},
 			anchors = {},
@@ -222,7 +255,14 @@ function VehicleChassis._buildWheel(self: Chassis, name: string, runtime: Folder
 
 	self:_rememberAnchor(wheel)
 	table.insert(self.wheelProperties, { part = wheel, properties = wheel.CustomPhysicalProperties })
-	wheel.CustomPhysicalProperties = PhysicalProperties.new(config.WheelDensity, 1, 0, 100, 100)
+	local tires = config.Tires
+	wheel.CustomPhysicalProperties = PhysicalProperties.new(
+		config.WheelDensity,
+		tires.Friction,
+		tires.Elasticity,
+		tires.FrictionWeight,
+		tires.ElasticityWeight
+	)
 	self.wheelRadius[name] = math.min(wheel.Size.Y, wheel.Size.Z) / 2
 	self.driven[name] = InputPolicy.isDriven(name, config.Drivetrain)
 
@@ -326,12 +366,14 @@ function VehicleChassis._separateWheelsFromBody(self: Chassis, runtime: Folder):
 	end
 end
 
-function VehicleChassis._setNetworkOwner(self: Chassis, player: Player?): ()
+function VehicleChassis._setNetworkOwner(self: Chassis, player: Player?, restoreAutomatic: boolean?): ()
 	for _, descendant in self.model:GetDescendants() do
 		if descendant:IsA("BasePart") and not descendant.Anchored then
 			local success, failure = pcall(function()
 				if descendant:CanSetNetworkOwnership() then
-					if player then
+					if not restoreAutomatic and self.config.NetworkOwnership == "Server" then
+						descendant:SetNetworkOwner(nil)
+					elseif player then
 						descendant:SetNetworkOwner(player)
 					else
 						descendant:SetNetworkOwnershipAuto()
@@ -485,13 +527,18 @@ function VehicleChassis.Step(self: Chassis, now: number): ()
 			motor.MotorMaxTorque = torque
 		end
 	end
-	local speed = self.seat.AssemblyLinearVelocity.Magnitude
-	local steeringLimit = math.min(
+	local speed = SteeringGeometry.forwardSpeed(self.seat.AssemblyLinearVelocity, self.seat.CFrame.LookVector)
+	local left, right = SteeringGeometry.angles(
+		steer,
+		speed,
+		self.wheelbase,
+		self.trackWidth,
 		config.SteerAngle,
-		math.deg(math.atan(config.MaxLateralAcceleration * self.wheelbase / math.max(speed * speed, 1)))
+		config.MaxLateralAcceleration,
+		config.AckermannRatio
 	)
-	for _, hinge in self.steering do
-		local target = -steer * steeringLimit
+	for name, hinge in self.steering do
+		local target = if name == "FL" then left else right
 		if hinge.TargetAngle ~= target then
 			hinge.TargetAngle = target
 		end
@@ -505,7 +552,7 @@ function VehicleChassis.Destroy(self: Chassis): ()
 	end
 	self.occupantConnection = nil
 	if self.started then
-		self:_setNetworkOwner(nil)
+		self:_setNetworkOwner(nil, true)
 	end
 	self.driver = nil
 	self.started = false

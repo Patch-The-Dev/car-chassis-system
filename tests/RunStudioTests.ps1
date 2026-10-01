@@ -37,7 +37,8 @@ function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$M
     $runner = Join-Path $PSScriptRoot $RunnerName
     $arguments = '--task RunScript --localPlaceFile "{0}" --runScriptFile "{1}" --outputFile "{2}" --quitAfterExecution' -f $place, $runner, $output
     $process = Start-Process -FilePath $StudioPath -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $consoleOutput -PassThru
-    $deadline = (Get-Date).AddSeconds(120)
+    $startedAt = Get-Date
+    $deadline = (Get-Date).AddSeconds(180)
     $report = ''
     $markerPattern = '(?m)^' + [regex]::Escape($Marker) + '\s*$'
     while ((Get-Date) -lt $deadline) {
@@ -48,6 +49,26 @@ function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$M
         if (Test-Path -LiteralPath $consoleOutput) {
             $console = (Get-Content -LiteralPath $consoleOutput -Raw) -replace '(?m)^.*\[FLog::Output\] ', ''
             $report += "`n" + $console
+        }
+        # Multiplayer server output lives in a child Studio process. Only accept
+        # a result carrying this invocation's unique ID, never an older test log.
+        if ($report -match '(?m)^CAR_CHASSIS_RUN_ID:([a-fA-F0-9-]+)\s*$') {
+            $runId = $Matches[1]
+            $resultPattern = 'CAR_CHASSIS_RESULT:' + [regex]::Escape($runId) + ':(PASS|FAIL):(.+)$'
+            $logDirectory = Join-Path $env:LOCALAPPDATA 'Roblox\logs'
+            $newLogs = Get-ChildItem -LiteralPath $logDirectory -Filter '*_Studio_*.log' -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $startedAt }
+            foreach ($log in $newLogs) {
+                $resultLine = Select-String -LiteralPath $log.FullName -Pattern $resultPattern -ErrorAction SilentlyContinue | Select-Object -Last 1
+                if ($resultLine -and $resultLine.Line -match $resultPattern) {
+                    if ($Matches[1] -eq 'PASS') {
+                        $report += "`n$($Matches[2]) integration checks passed`n$Marker`n"
+                    } else {
+                        $report += "`nCAR_CHASSIS_INTEGRATION_FAILURE: $($Matches[2])`n"
+                    }
+                    break
+                }
+            }
         }
         if ($report -match $markerPattern) { break }
         if ($report -match '(?m)^CAR_CHASSIS_INTEGRATION_FAILURE:|^RunScript:\d+:') { break }

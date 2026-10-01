@@ -5,7 +5,9 @@ local CollectionService = game:GetService("CollectionService")
 
 local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
 local ConfigCopy = require(ReplicatedStorage.ChassisShared.ConfigCopy)
+local ConfigTree = require(ReplicatedStorage.ChassisShared.ConfigTree)
 local InputPolicy = require(ReplicatedStorage.ChassisShared.InputPolicy)
+local SteeringGeometry = require(ReplicatedStorage.ChassisShared.SteeringGeometry)
 local Fixture = require(ServerScriptService.Fixture)
 local VehicleChassis = require(ServerScriptService.VehicleChassis)
 local ChassisRegistry = require(ServerScriptService.ChassisRegistry)
@@ -24,6 +26,47 @@ check(tuned.Suspension.Rear ~= Config.Suspension.Rear, "rear suspension has an i
 check(not pcall(function()
 	Config.Suspension.Front.Stiffness = 1
 end), "default suspension is frozen at every level")
+tuned.Tires.Friction = 0.4
+check(Config.Tires.Friction == 1, "tire tuning is independent from defaults")
+local future = { Level = { Deep = { Value = 7 } } }
+local futureCopy = ConfigTree.copy(future)
+futureCopy.Level.Deep.Value = 9
+check(future.Level.Deep.Value == 7, "future nested settings are copied without schema-specific logic")
+ConfigTree.freeze(futureCopy)
+check(table.isfrozen(futureCopy.Level.Deep), "future nested settings are frozen recursively")
+local cyclic = {}
+cyclic.Self = cyclic
+local cyclicCopy = ConfigTree.copy(cyclic)
+check(cyclicCopy ~= cyclic and cyclicCopy.Self == cyclicCopy, "recursive copy preserves cycles within the copy")
+ConfigTree.freeze(cyclicCopy)
+check(table.isfrozen(cyclicCopy), "recursive freeze handles cycles")
+check(Config.RemoteRateLimit < 1 / 60, "abuse gate allows vehicles configured for 60 Hz")
+check(
+	SteeringGeometry.forwardSpeed(Vector3.new(0, 200, 0), Vector3.new(0, 0, -1)) == 0,
+	"falling does not reduce steering"
+)
+check(
+	SteeringGeometry.forwardSpeed(Vector3.new(200, 0, 0), Vector3.new(0, 0, -1)) == 0,
+	"sideways sliding does not reduce steering"
+)
+check(
+	SteeringGeometry.forwardSpeed(Vector3.new(0, 200, -30), Vector3.new(0, 0.5, -1)) == 30,
+	"ground projection ignores vertical motion on a pitched vehicle"
+)
+local left, right = SteeringGeometry.angles(1, 0, 6, 6, 35, 80, 1)
+check(
+	left < 0 and right < left and math.abs(right) <= 35.000001,
+	"right turn uses a sharper inner wheel within the limit"
+)
+local mirrorLeft, mirrorRight = SteeringGeometry.angles(-1, 0, 6, 6, 35, 80, 1)
+check(
+	math.abs(mirrorLeft + right) < 0.000001 and math.abs(mirrorRight + left) < 0.000001,
+	"left and right turns mirror"
+)
+local parallelLeft, parallelRight = SteeringGeometry.angles(0.5, 0, 6, 6, 35, 80, 0)
+check(parallelLeft == -17.5 and parallelRight == -17.5, "parallel steering remains available")
+local zeroLeft, zeroRight = SteeringGeometry.angles(1, 0, 6, 6, 0, 80, 1)
+check(zeroLeft == 0 and zeroRight == 0, "zero steering angle avoids division by zero")
 
 local function eventually(predicate, message)
 	local deadline = os.clock() + 3
@@ -55,6 +98,45 @@ end), "missing wheel should fail before changing the model")
 check(invalid:FindFirstChild("ChassisRuntime") == nil, "invalid model should remain untouched")
 invalid:Destroy()
 
+for _, reversed in { "Axles", "FrontWheels" } do
+	local reversedVehicle = Fixture.create()
+	if reversed == "Axles" then
+		reversedVehicle.DriveSeat.CFrame *= CFrame.Angles(0, math.pi, 0)
+	else
+		local leftFrame = reversedVehicle.Wheels.FL.CFrame
+		reversedVehicle.Wheels.FL.CFrame = reversedVehicle.Wheels.FR.CFrame
+		reversedVehicle.Wheels.FR.CFrame = leftFrame
+	end
+	check(not pcall(function()
+		VehicleChassis.new(reversedVehicle)
+	end), `reversed {reversed} geometry is rejected`)
+	reversedVehicle:Destroy()
+end
+
+for _, path in { "DriveSeat", "Body", "Wheels", "FL", "FR", "RL", "RR", "Misc" } do
+	local duplicateVehicle = Fixture.create()
+	local parent = if string.len(path) == 2 then duplicateVehicle.Wheels else duplicateVehicle
+	local original = parent:FindFirstChild(path)
+	local duplicate = if original then original:Clone() else Instance.new("Folder")
+	duplicate.Name = path
+	duplicate.Parent = parent
+	if path == "Misc" then
+		duplicate:Clone().Parent = parent
+	end
+	local okay, message = pcall(function()
+		VehicleChassis.new(duplicateVehicle)
+	end)
+	check(
+		not okay and string.find(tostring(message), "multiple children", 1, true) ~= nil,
+		`duplicate {path} is rejected clearly`
+	)
+	check(
+		duplicateVehicle:FindFirstChild("ChassisRuntime") == nil and duplicateVehicle.DriveSeat.Anchored,
+		"duplicate validation does not mutate the model"
+	)
+	duplicateVehicle:Destroy()
+end
+
 local invalidTuning = ConfigCopy.copy()
 invalidTuning.DriveTorque = -1
 local untouched = Fixture.create()
@@ -63,6 +145,28 @@ check(not pcall(function()
 end), "invalid tuning is rejected before assembly")
 check(untouched:FindFirstChild("ChassisRuntime") == nil, "invalid tuning leaves the model untouched")
 untouched:Destroy()
+
+local tireConfig = ConfigCopy.copy()
+tireConfig.Tires.Friction = 0.4
+tireConfig.Tires.FrictionWeight = 10
+local tireCar = Fixture.create()
+local tireController = VehicleChassis.new(tireCar, tireConfig)
+tireController:Start()
+check(math.abs(tireCar.Wheels.FL.CustomPhysicalProperties.Friction - 0.4) < 0.000001, "tire friction reaches the wheel")
+check(tireCar.Wheels.FL.CustomPhysicalProperties.FrictionWeight == 10, "tire surface weighting is configurable")
+check(table.isfrozen(tireController.config.Tires), "controller tire settings are frozen")
+tireController:Destroy()
+check(tireCar.Wheels.FL.CustomPhysicalProperties == nil, "custom tire settings are restored on teardown")
+tireCar:Destroy()
+for _, value in { -1, 3, math.huge, 0 / 0 } do
+	local invalidTires = ConfigCopy.copy()
+	invalidTires.Tires.Friction = value
+	local rejected = Fixture.create()
+	check(not pcall(function()
+		VehicleChassis.new(rejected, invalidTires)
+	end), "invalid tire friction is rejected before Roblox clamps it")
+	rejected:Destroy()
+end
 
 local car = Fixture.create()
 local wheelArch = Instance.new("Part")
@@ -116,6 +220,7 @@ car:Destroy()
 local function checkDriveMode(drivetrain)
 	local tuning = ConfigCopy.copy()
 	tuning.Drivetrain = drivetrain
+	tuning.AckermannRatio = 0 -- Parallel output has an exact low-speed target.
 	local vehicle = Fixture.create()
 	local controller = VehicleChassis.new(vehicle, tuning)
 	local originalTorque = controller.config.DriveTorque

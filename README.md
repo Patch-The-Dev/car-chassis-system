@@ -7,8 +7,9 @@ A reusable Roblox chassis for four-wheel vehicle models. The server assembles su
 - Builds independent wheel carriers, spring suspension, front steering servos, and wheel motors from a vehicle model.
 - Supports front, rear, or all-wheel drive, with an optional tuning table per controller.
 - Limits drive and braking torque using assembled vehicle mass and wheel radius, caps suspension force, and reduces steering angle at speed.
+- Uses Ackermann steering for different inner and outer wheel angles, with an adjustable blend for parallel steering.
 - Accepts input only from the player occupying that vehicle's drive seat. The server bounds the values, limits request rate, and returns the motors to neutral when input stops.
-- Assigns physics network ownership to the driver while seated and restores automatic ownership when the seat is vacated.
+- Supports driver-owned or server-owned physics per vehicle, with ownership cleanup on detach.
 - Separates wheels from nearby body parts while retaining collision with the world; distant decorative parts add no wheel collision constraints.
 - Handles multiple tagged vehicles, including models moved into or out of `Workspace`, and removes generated parts, constraints, and connections on detach.
 
@@ -23,9 +24,11 @@ The chassis does not depend on a specific car mesh, dashboard, currency system, 
 | [`src/server/ChassisRegistry.luau`](src/server/ChassisRegistry.luau) | Owns tagged model lifecycle and the namespaced input remote. |
 | [`src/client/DriverInput.client.luau`](src/client/DriverInput.client.luau) | Relays the local `VehicleSeat` controls and handbrake input. |
 | [`src/shared/ChassisConfig.luau`](src/shared/ChassisConfig.luau) | Active tuning values for drivetrain, steering, torque, and suspension. |
-| [`src/shared/ConfigCopy.luau`](src/shared/ConfigCopy.luau) | Copies per-vehicle tuning, including independent front and rear suspension tables. |
+| [`src/shared/ConfigCopy.luau`](src/shared/ConfigCopy.luau) | Creates independent per-vehicle tuning from the defaults or a supplied table. |
+| [`src/shared/ConfigTree.luau`](src/shared/ConfigTree.luau) | Recursively copies and freezes configuration, including future nested settings. |
 | [`src/shared/InputPolicy.luau`](src/shared/InputPolicy.luau) | Input validation and drivetrain calculations. |
-| [`tests/`](tests) | Structural checks and a Studio play test using the production client and server. |
+| [`src/shared/SteeringGeometry.luau`](src/shared/SteeringGeometry.luau) | Ground-speed projection, steering limits, and inner/outer wheel geometry. |
+| [`tests/`](tests) | Structural checks and a two-player Studio test using the production client and server. |
 
 ## Apply it to a vehicle
 
@@ -43,7 +46,7 @@ VehicleModel [tag: ChassisVehicle]
 └── Misc                      Optional Model or Folder of body parts
 ```
 
-Place the model in `Workspace`, position its parts, and apply the `ChassisVehicle` CollectionService tag. The server validates all four wheels before changing the model, assembles the running constraints, then unanchors the authored parts. If a required part is parented after tagging, the registry retries when that part appears. The drive seat and four wheel names are required. The [`vehicle contract`](docs/VEHICLE_CONTRACT.md) covers orientation, collision, authored constraints, and tuning.
+Place the model in `Workspace`, position its parts, and apply the `ChassisVehicle` CollectionService tag. The server checks required classes, unique names, axle geometry, and tuning before changing the model. It assembles the running constraints, then unanchors the authored parts. If a required part is parented after tagging, the registry retries when that part appears. The [`vehicle contract`](docs/VEHICLE_CONTRACT.md) covers orientation, collision, authored constraints, and tuning.
 
 The server creates `ReplicatedStorage.ChassisShared.Remotes.Input` once and validates an existing object at that path before using it. An unrelated top-level remote named `ChassisInput` has no effect on this package.
 
@@ -79,17 +82,21 @@ The runner builds an isolated test place. Its fixture is test data and is exclud
 
 | Suite | Coverage |
 | --- | --- |
-| Structural | Invalid models and tuning, constraint construction, all three drivetrains, handbraking, stale input, independent tuning, collision separation, missing parts, model lifecycle, multiple vehicles, and teardown. |
-| Integration | An actual player sits; the production client sends seat controls; the server authenticates the occupant and assigns ownership. Checks forward movement, turning, reverse movement, upright stability, rejected input while unseated, handbrake binding cleanup, and ownership restoration on detach. |
+| Structural | Missing and duplicate model parts, invalid tuning, constraint construction, all three drivetrains, handbraking, stale input, recursive tuning isolation, tire properties, Ackermann geometry, ground-speed steering, collision separation, model lifecycle, and teardown. |
+| Integration | Two actual players run the production client. Checks authenticated driving, rejection of another player's controls, forward and reverse movement, right-turn direction, upright stability, vehicle handoff, driver-owned and server-owned physics, handbrake cleanup, and ownership restoration. Controlled-clock checks also verify 60 Hz vehicle acceptance and the separate flood gate with a real seated player. |
 
 [GitHub Actions](.github/workflows/ci.yml) checks formatting, lint, all runtime source with Luau analysis, and both Rojo builds. The Studio suites run locally; the Actions status reports source checks and builds.
 
 ## Design boundaries
 
-The server owns model assembly and accepts input only from the current seat occupant. A driver receives network ownership for responsive vehicle physics. Roblox clients with physics ownership can manipulate that simulation, so a game that awards money or competitive results from vehicle movement must validate those results separately on the server. This package intentionally contains no reward or persistence logic.
+The server owns model assembly and accepts input only from the current seat occupant. `NetworkOwnership = "Driver"` gives the seated driver responsive local physics and returns ownership to automatic when they leave. `NetworkOwnership = "Server"` keeps the running vehicle on the server, including while parked. Both modes restore automatic ownership on detach. Choose server ownership when the vehicle's simulation must stay under server control; account for the additional server workload and input latency.
+
+For driver-owned physics, games must validate movement-based rewards and competitive outcomes separately. The motor speed settings control normal driving and are not an anti-cheat boundary. See [Roblox's ownership guidance](https://create.roblox.com/docs/physics/network-ownership). This package contains no reward or persistence logic.
 
 Suspension, torque, and steering values in `ChassisConfig` are starting values. `ConfigCopy.copy()` creates independent tuning, including both suspension tables. Pass it to `VehicleChassis.new(model, config)` for direct construction, or supply a per-model resolver to `ChassisRegistry.new()` for tagged vehicles. Each controller takes an immutable snapshot. See the [tuning example](docs/VEHICLE_CONTRACT.md#per-vehicle-configuration).
 
-Drive and braking torque are capped by vehicle mass and wheel radius as well as the configured torque ceilings. Steering angle decreases with speed to limit the requested lateral acceleration. Springs have a finite force limit. Tune these values against the vehicle's proportions, mass, wheel size, and intended handling. Undriven wheels receive no motor torque outside handbraking. The handbrake targets zero angular speed on all four wheels, including when throttle is held.
+Drive and braking torque are capped by vehicle mass and wheel radius as well as the configured torque ceilings. Steering uses horizontal forward speed, so vertical falls and sideways slides do not reduce its angle. Ackermann geometry uses measured wheelbase and front track width while keeping both hinges within the configured limit. Tire friction, elasticity, and surface weighting are configurable, and springs have a finite force limit.
+
+Tune these values against the vehicle's proportions, mass, wheel size, and intended handling. Undriven wheels receive no motor torque outside handbraking. The handbrake targets zero angular speed on all four wheels, including when throttle is held.
 
 **PatchTheDev:** [Website and portfolio](https://www.patchthedev.com)

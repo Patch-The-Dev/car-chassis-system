@@ -4,6 +4,7 @@ local CollectionService = game:GetService("CollectionService")
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
@@ -12,8 +13,11 @@ local remote =
 local player = Players.LocalPlayer
 local BRAKE_ACTION = "CarChassisHandbrake"
 
-local generation = 0
 local seatedConnection: RBXScriptConnection?
+local drivingHumanoid: Humanoid?
+local drivingSeat: VehicleSeat?
+local drivingModel: Model?
+local lastSent = 0
 local heldBrakeInputs: { [InputObject]: boolean } = {}
 local brakeBound = false
 
@@ -39,10 +43,15 @@ local function bindBrake()
 	brakeBound = true
 end
 
-local function beginDriving(humanoid: Humanoid, seat: BasePart?)
-	generation += 1
+local function stopDriving()
+	drivingHumanoid = nil
+	drivingSeat = nil
+	drivingModel = nil
 	unbindBrake()
-	local currentGeneration = generation
+end
+
+local function beginDriving(humanoid: Humanoid, seat: BasePart?)
+	stopDriving()
 	if not seat or not seat:IsA("VehicleSeat") or seat.Name ~= "DriveSeat" then
 		return
 	end
@@ -50,41 +59,29 @@ local function beginDriving(humanoid: Humanoid, seat: BasePart?)
 	if not model or not model:IsA("Model") or not CollectionService:HasTag(model, Config.Tag) then
 		return
 	end
+	drivingHumanoid = humanoid
+	drivingSeat = seat
+	drivingModel = model
+	lastSent = 0
 	bindBrake()
-
-	task.spawn(function()
-		while
-			generation == currentGeneration
-			and humanoid.SeatPart == seat
-			and CollectionService:HasTag(model, Config.Tag)
-		do
-			local brake = next(heldBrakeInputs) ~= nil
-				or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
-				or UserInputService:IsGamepadButtonDown(Enum.UserInputType.Gamepad1, Enum.KeyCode.ButtonL1)
-			remote:FireServer(model, seat.ThrottleFloat, seat.SteerFloat, brake)
-			task.wait(1 / 20)
-		end
-		if generation == currentGeneration then
-			unbindBrake()
-		end
-	end)
 end
 
 local function bindCharacter(character: Model)
-	generation += 1
-	unbindBrake()
+	stopDriving()
 	local previousConnection = seatedConnection
 	if previousConnection then
 		previousConnection:Disconnect()
 	end
 	seatedConnection = nil
 	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
+	if player.Character ~= character then
+		return
+	end
 	seatedConnection = humanoid.Seated:Connect(function(active, seat)
 		if active then
 			beginDriving(humanoid, seat)
 		else
-			generation += 1
-			unbindBrake()
+			stopDriving()
 		end
 	end)
 	if humanoid.SeatPart then
@@ -92,7 +89,48 @@ local function bindCharacter(character: Model)
 	end
 end
 
+-- Sample after Roblox's input controls update the seat for the current frame.
+-- One sender avoids overlapping driving loops during seating transitions.
+RunService:BindToRenderStep("CarChassisInput", Enum.RenderPriority.Input.Value + 2, function()
+	local humanoid, seat, model = drivingHumanoid, drivingSeat, drivingModel
+	if not humanoid or not seat or not model then
+		return
+	end
+	if humanoid.SeatPart ~= seat or not CollectionService:HasTag(model, Config.Tag) then
+		stopDriving()
+		return
+	end
+	local now = os.clock()
+	if now - lastSent < 1 / 20 then
+		return
+	end
+	lastSent = now
+	local brake = next(heldBrakeInputs) ~= nil
+		or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+		or UserInputService:IsGamepadButtonDown(Enum.UserInputType.Gamepad1, Enum.KeyCode.ButtonL1)
+	remote:FireServer(model, seat.ThrottleFloat, seat.SteerFloat, brake)
+end)
+
 player.CharacterAdded:Connect(bindCharacter)
+player.CharacterRemoving:Connect(function()
+	stopDriving()
+	if seatedConnection then
+		seatedConnection:Disconnect()
+		seatedConnection = nil
+	end
+end)
+CollectionService:GetInstanceAddedSignal(Config.Tag):Connect(function(instance)
+	local character = player.Character
+	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
+	if humanoid and humanoid.SeatPart and humanoid.SeatPart.Parent == instance then
+		beginDriving(humanoid, humanoid.SeatPart)
+	end
+end)
+CollectionService:GetInstanceRemovedSignal(Config.Tag):Connect(function(instance)
+	if drivingModel == instance then
+		stopDriving()
+	end
+end)
 UserInputService.WindowFocusReleased:Connect(function()
 	table.clear(heldBrakeInputs)
 end)
