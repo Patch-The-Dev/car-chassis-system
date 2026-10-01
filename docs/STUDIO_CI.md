@@ -22,7 +22,7 @@ The workflow is disabled until the repository variable `STUDIO_RUNTIME_TESTS` is
 - Manual execution requires both `master` and the enabled repository variable.
 - Pull requests, fork workflows, and other branches are excluded from Studio execution.
 - The checkout uses the triggering commit, has read-only repository permissions, and does not retain GitHub credentials in Git configuration.
-- Actions are pinned to commit revisions. Concurrent Studio runs are serialized on this repository's runner.
+- Actions are pinned to commit revisions. Workflow concurrency serializes runs within each repository. `RunStudioCI.ps1` also acquires a named Windows mutex shared by all three projects, so repository runners on the same desktop cannot launch competing Studio suites.
 - Only the generated JSON result is uploaded. Raw Studio logs and local account data are excluded.
 
 To disable Studio CI, remove the variable or set it to `false`. The local test command remains available.

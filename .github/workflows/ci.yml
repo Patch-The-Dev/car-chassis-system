@@ -27,6 +27,20 @@ jobs:
       - name: Lint
         run: selene src tests
 
+      - name: Validate Studio runner scripts
+        shell: pwsh
+        run: |
+          foreach ($scriptFile in Get-ChildItem tests -Filter '*.ps1') {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $scriptFile.FullName, [ref]$tokens, [ref]$parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -ne 0) {
+              throw "Invalid PowerShell in $($scriptFile.Name): $parseErrors"
+            }
+          }
+
       - name: Type check all runtime source
         run: |
           rojo sourcemap default.project.json --include-non-scripts -o sourcemap.json

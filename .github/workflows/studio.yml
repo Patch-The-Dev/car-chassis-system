@@ -42,7 +42,7 @@ jobs:
 
       - name: Run structural and multiplayer Studio suites
         shell: pwsh
-        run: ./tests/RunStudioTests.ps1 -ReportPath "$env:RUNNER_TEMP/chassis-runtime.json"
+        run: ./tests/RunStudioCI.ps1 -ReportPath "$env:RUNNER_TEMP/chassis-runtime.json"
 
       - name: Upload runtime results
         if: always()
