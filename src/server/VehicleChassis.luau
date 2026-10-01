@@ -4,15 +4,19 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
+local ConfigCopy = require(ReplicatedStorage.ChassisShared.ConfigCopy)
 local InputPolicy = require(ReplicatedStorage.ChassisShared.InputPolicy)
 
 local WHEEL_NAMES = { "FL", "FR", "RL", "RR" }
+local WHEEL_BODY_MARGIN = 0.5
 
 type State = {
 	config: typeof(Config),
 	model: Model,
 	seat: VehicleSeat,
 	body: Model,
+	mass: number,
+	wheelbase: number,
 	wheels: { [string]: BasePart },
 	created: { Instance },
 	anchors: { [BasePart]: boolean },
@@ -86,6 +90,7 @@ end
 local function validateSuspension(axle: string, suspension: typeof(Config.Suspension.Front)): ()
 	requireFinite(`Suspension.{axle}.Stiffness`, suspension.Stiffness, 0)
 	requireFinite(`Suspension.{axle}.Damping`, suspension.Damping, 0)
+	requireFinite(`Suspension.{axle}.MaxForce`, suspension.MaxForce, 0.000001)
 	requireFinite(`Suspension.{axle}.Length`, suspension.Length, 0.000001)
 	requireFinite(`Suspension.{axle}.Compression`, suspension.Compression, 0)
 	requireFinite(`Suspension.{axle}.Extension`, suspension.Extension, 0)
@@ -102,6 +107,9 @@ local function validateConfig(config: typeof(Config)): ()
 	requireFinite("InputRateLimit", config.InputRateLimit, 0.000001)
 	requireFinite("MaxForwardSpeed", config.MaxForwardSpeed, 0)
 	requireFinite("MaxReverseSpeed", config.MaxReverseSpeed, 0)
+	requireFinite("MaxAcceleration", config.MaxAcceleration, 0.000001)
+	requireFinite("MaxDeceleration", config.MaxDeceleration, 0.000001)
+	requireFinite("MaxLateralAcceleration", config.MaxLateralAcceleration, 0.000001)
 	requireFinite("DriveTorque", config.DriveTorque, 0)
 	requireFinite("CoastTorque", config.CoastTorque, 0)
 	requireFinite("BrakeTorque", config.BrakeTorque, 0)
@@ -117,8 +125,12 @@ local function validateConfig(config: typeof(Config)): ()
 end
 
 function VehicleChassis.new(model: Model, config: typeof(Config)?): Chassis
-	local tune = config or Config
+	local tune = ConfigCopy.copy(config or Config)
 	validateConfig(tune)
+	table.freeze(tune.Suspension.Front)
+	table.freeze(tune.Suspension.Rear)
+	table.freeze(tune.Suspension)
+	table.freeze(tune)
 	local seat = model:FindFirstChild("DriveSeat")
 	if not seat or not seat:IsA("VehicleSeat") then
 		error(`{model:GetFullName()} requires a VehicleSeat named DriveSeat`)
@@ -140,12 +152,20 @@ function VehicleChassis.new(model: Model, config: typeof(Config)?): Chassis
 	for _, name in WHEEL_NAMES do
 		wheels[name] = expectPart(wheelsContainer, name)
 	end
+	local frontCenter = (wheels.FL.Position + wheels.FR.Position) / 2
+	local rearCenter = (wheels.RL.Position + wheels.RR.Position) / 2
+	local wheelbase = math.abs((frontCenter - rearCenter):Dot(seat.CFrame.LookVector))
+	if wheelbase < 0.1 then
+		error(`{model:GetFullName()} requires separated front and rear axles along the seat's forward direction`)
+	end
 	return setmetatable(
 		{
 			config = tune,
 			model = model,
 			seat = seat,
 			body = body,
+			mass = 0,
+			wheelbase = wheelbase,
 			wheels = wheels,
 			created = {},
 			anchors = {},
@@ -224,6 +244,7 @@ function VehicleChassis._buildWheel(self: Chassis, name: string, runtime: Folder
 	spring.FreeLength = suspension.Length
 	spring.Stiffness = suspension.Stiffness
 	spring.Damping = suspension.Damping
+	spring.MaxForce = suspension.MaxForce
 	spring.LimitsEnabled = true
 	spring.MinLength = suspension.Length - suspension.Compression
 	spring.MaxLength = suspension.Length + suspension.Extension
@@ -268,15 +289,33 @@ function VehicleChassis._separateWheelsFromBody(self: Chassis, runtime: Folder):
 			return
 		end
 		for _, descendant in container:GetDescendants() do
-			if descendant:IsA("BasePart") and descendant.CanCollide then
+			if descendant:IsA("BasePart") then
 				table.insert(bodyParts, descendant)
 			end
 		end
 	end
 	collect(self.body)
 	collect(self.model:FindFirstChild("Misc"))
-	for _, wheel in self.wheels do
+	for name, wheel in self.wheels do
+		local suspension = if name == "FL" or name == "FR"
+			then self.config.Suspension.Front
+			else self.config.Suspension.Rear
+		-- A bounding sphere plus suspension travel covers nearby body contact without
+		-- creating constraints against every decorative part in a detailed model.
+		local reach = wheel.Size.Magnitude / 2
+			+ math.max(suspension.Compression, suspension.Extension)
+			+ WHEEL_BODY_MARGIN
 		for _, bodyPart in bodyParts do
+			local localCenter = bodyPart.CFrame:PointToObjectSpace(wheel.Position)
+			local halfSize = bodyPart.Size / 2
+			local outside = Vector3.new(
+				math.max(math.abs(localCenter.X) - halfSize.X, 0),
+				math.max(math.abs(localCenter.Y) - halfSize.Y, 0),
+				math.max(math.abs(localCenter.Z) - halfSize.Z, 0)
+			)
+			if outside.Magnitude > reach then
+				continue
+			end
 			local separation = Instance.new("NoCollisionConstraint")
 			separation.Name = "WheelBodySeparation"
 			separation.Part0 = wheel
@@ -314,6 +353,20 @@ function VehicleChassis._driverChanged(self: Chassis): ()
 	self.steer = 0
 	self.handbrake = false
 	self.lastInput = 0
+	local roots: { [BasePart]: boolean } = {}
+	self.mass = 0
+	for _, descendant in self.model:GetDescendants() do
+		if descendant:IsA("BasePart") and not descendant.Anchored then
+			local root = descendant.AssemblyRootPart or descendant
+			if not roots[root] then
+				roots[root] = true
+				local mass = root.AssemblyMass
+				if mass > 0 and mass < math.huge then
+					self.mass += mass
+				end
+			end
+		end
+	end
 	self.inputDirty = true
 	self:Step(os.clock())
 	self:_setNetworkOwner(self.driver)
@@ -412,19 +465,19 @@ function VehicleChassis.Step(self: Chassis, now: number): ()
 	local drivenCount = if config.Drivetrain == "AWD" then 4 else 2
 	for name, motor in self.motors do
 		local driven = self.driven[name]
+		local radius = self.wheelRadius[name]
 		local target = if driven and not handbrake
-			then InputPolicy.targetAngularVelocity(
-				throttle,
-				self.wheelRadius[name],
-				config.MaxForwardSpeed,
-				config.MaxReverseSpeed
-			)
+			then InputPolicy.targetAngularVelocity(throttle, radius, config.MaxForwardSpeed, config.MaxReverseSpeed)
 			else 0
+		local accelerationTorque = self.mass * config.MaxAcceleration * radius / drivenCount
+		local decelerationTorque = self.mass * config.MaxDeceleration * radius
 		local torque = if handbrake
-			then config.BrakeTorque / 4
+			then math.min(config.BrakeTorque / 4, decelerationTorque / 4)
 			else if not driven
 				then 0
-				else if throttle ~= 0 then config.DriveTorque / drivenCount else config.CoastTorque
+				else if throttle ~= 0
+					then math.min(config.DriveTorque / drivenCount, accelerationTorque)
+					else math.min(config.CoastTorque, decelerationTorque / drivenCount)
 		if motor.AngularVelocity ~= target then
 			motor.AngularVelocity = target
 		end
@@ -432,8 +485,13 @@ function VehicleChassis.Step(self: Chassis, now: number): ()
 			motor.MotorMaxTorque = torque
 		end
 	end
+	local speed = self.seat.AssemblyLinearVelocity.Magnitude
+	local steeringLimit = math.min(
+		config.SteerAngle,
+		math.deg(math.atan(config.MaxLateralAcceleration * self.wheelbase / math.max(speed * speed, 1)))
+	)
 	for _, hinge in self.steering do
-		local target = -steer * config.SteerAngle
+		local target = -steer * steeringLimit
 		if hinge.TargetAngle ~= target then
 			hinge.TargetAngle = target
 		end

@@ -1,0 +1,5 @@
+local result = game:GetService("StudioTestService"):ExecutePlayModeAsync("CarChassisIntegration")
+assert(type(result) == "table", "Studio returned no integration result")
+assert(result.error == nil, result.error)
+print(`{result.passed} integration checks passed`)
+print("CAR_CHASSIS_INTEGRATION_PASS")

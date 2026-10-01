@@ -8,7 +8,14 @@
     "ServerScriptService": {
       "VehicleChassis": { "$path": "src/server/VehicleChassis.luau" },
       "ChassisRegistry": { "$path": "src/server/ChassisRegistry.luau" },
+      "Integration": { "$path": "tests/Integration.server.luau" },
       "Fixture": { "$path": "tests/Fixture.luau" }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "ChassisDriverInput": { "$path": "src/client/DriverInput.client.luau" },
+        "Integration": { "$path": "tests/Integration.client.luau" }
+      }
     }
   }
 }

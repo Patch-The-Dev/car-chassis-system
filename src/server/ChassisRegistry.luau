@@ -1,15 +1,21 @@
 --!strict
 
 local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage.ChassisShared.ChassisConfig)
 local VehicleChassis = require(script.Parent.VehicleChassis)
 
+type ConfigResolver = (Model) -> typeof(Config)?
 type State = {
+	configResolver: ConfigResolver?,
 	active: { [Model]: VehicleChassis.Chassis },
 	watchers: { [Model]: { RBXScriptConnection } },
+	retryWatchers: { [Model]: RBXScriptConnection },
+	attaching: { [Model]: boolean },
+	lastRemoteInput: { [Player]: number },
 	connections: { RBXScriptConnection },
 	started: boolean,
 }
@@ -40,8 +46,20 @@ local function getOrCreate(parent: Instance, name: string, className: string): I
 	return created
 end
 
-function ChassisRegistry.new(): Registry
-	return setmetatable({ active = {}, watchers = {}, connections = {}, started = false } :: State, ChassisRegistry)
+function ChassisRegistry.new(configResolver: ConfigResolver?): Registry
+	return setmetatable(
+		{
+			configResolver = configResolver,
+			active = {},
+			watchers = {},
+			retryWatchers = {},
+			attaching = {},
+			lastRemoteInput = {},
+			connections = {},
+			started = false,
+		} :: State,
+		ChassisRegistry
+	)
 end
 
 function ChassisRegistry.Get(self: Registry, model: Model): VehicleChassis.Chassis?
@@ -56,24 +74,62 @@ function ChassisRegistry._detach(self: Registry, model: Model): ()
 	end
 end
 
+function ChassisRegistry._clearRetry(self: Registry, model: Model): ()
+	local connection = self.retryWatchers[model]
+	if connection then
+		connection:Disconnect()
+		self.retryWatchers[model] = nil
+	end
+end
+
 function ChassisRegistry._reconcile(self: Registry, model: Model): ()
 	if not self.started or not CollectionService:HasTag(model, Config.Tag) or not model:IsDescendantOf(workspace) then
+		self:_clearRetry(model)
 		self:_detach(model)
 		return
 	end
-	if self.active[model] then
+	if self.active[model] or self.attaching[model] then
 		return
 	end
+	self.attaching[model] = true
 	local success, result = pcall(function()
-		local chassis = VehicleChassis.new(model)
+		local resolve = self.configResolver
+		local tuning = if resolve then resolve(model) else nil
+		local chassis = VehicleChassis.new(model, tuning)
 		chassis:Start()
 		return chassis
 	end)
+	self.attaching[model] = nil
+	if not self.started or not CollectionService:HasTag(model, Config.Tag) or not model:IsDescendantOf(workspace) then
+		if success then
+			result:Destroy()
+		end
+		self:_clearRetry(model)
+		return
+	end
 	if success then
+		self:_clearRetry(model)
 		self.active[model] = result
 	else
+		if not self.retryWatchers[model] then
+			self.retryWatchers[model] = model.DescendantAdded:Connect(function(descendant)
+				local wheels = model:FindFirstChild("Wheels")
+				if
+					descendant.Name == "DriveSeat"
+					or descendant.Name == "Body"
+					or descendant == wheels
+					or (wheels ~= nil and descendant.Parent == wheels and descendant:IsA("BasePart"))
+				then
+					self:_reconcile(model)
+				end
+			end)
+		end
 		warn(`[Car Chassis] Could not initialize {model:GetFullName()}: {result}`)
 	end
+end
+
+function ChassisRegistry.Retry(self: Registry, model: Model): ()
+	self:_reconcile(model)
 end
 
 function ChassisRegistry._watch(self: Registry, instance: Instance): ()
@@ -95,6 +151,7 @@ function ChassisRegistry._watch(self: Registry, instance: Instance): ()
 end
 
 function ChassisRegistry._forget(self: Registry, model: Model): ()
+	self:_clearRetry(model)
 	self:_detach(model)
 	local watchers = self.watchers[model]
 	if watchers then
@@ -142,13 +199,25 @@ function ChassisRegistry.Start(self: Registry): ()
 	end
 	table.insert(
 		self.connections,
+		Players.PlayerRemoving:Connect(function(player)
+			self.lastRemoteInput[player] = nil
+		end)
+	)
+	table.insert(
+		self.connections,
 		remote.OnServerEvent:Connect(function(player, model, throttle, steer, brake)
+			local now = os.clock()
+			local lastInput = self.lastRemoteInput[player]
+			if lastInput and now - lastInput < Config.InputRateLimit then
+				return
+			end
+			self.lastRemoteInput[player] = now
 			if typeof(model) ~= "Instance" or not model:IsA("Model") then
 				return
 			end
 			local chassis = self.active[model]
 			if chassis then
-				chassis:ApplyInput(player, throttle, steer, brake, os.clock())
+				chassis:ApplyInput(player, throttle, steer, brake, now)
 			end
 		end)
 	)
@@ -183,6 +252,7 @@ function ChassisRegistry.Stop(self: Registry): ()
 	for _, model in watchedModels do
 		self:_forget(model)
 	end
+	table.clear(self.lastRemoteInput)
 end
 
 return ChassisRegistry
