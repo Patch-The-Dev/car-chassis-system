@@ -86,6 +86,8 @@ The runner builds an isolated test place. Its fixture is test data and is exclud
 | Structural | Missing and duplicate model parts, invalid tuning, constraint construction, all three drivetrains, handbraking, stale input, recursive tuning isolation, tire properties, Ackermann geometry, ground-speed steering, collision separation, model lifecycle, a 50-vehicle parked scheduling check, and teardown. |
 | Integration | Two actual players run the production client. Checks authenticated driving, rejection of another player's controls, forward and reverse movement, right-turn direction, upright stability, vehicle handoff, driver-owned and server-owned physics, handbrake cleanup, and ownership restoration. Controlled-clock checks also verify 60 Hz vehicle acceptance and the separate flood gate with a real seated player. A 100-vehicle server-owned parked fixture records control-loop and heartbeat timings in the runtime JSON report. |
 
+The [recorded local Studio run](docs/validation.json) passed **162 structural checks** and **46 multiplayer checks** from a clean source commit. It includes the 100-vehicle parked fleet timings, tested commit, and completion time. The Studio workflow generates a fresh report for each automated run.
+
 [Source checks](.github/workflows/ci.yml) run formatting, lint, all runtime source with Luau analysis, and both Rojo builds in GitHub Actions. The optional [Studio runtime workflow](.github/workflows/studio.yml) executes both suites on a dedicated Windows runner and uploads their results. It is disabled until that runner is configured and explicitly enabled. See [Studio CI setup and execution rules](docs/STUDIO_CI.md).
 
 ## Design boundaries

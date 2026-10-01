@@ -1,0 +1,30 @@
+{
+  "commit": "1f6c0199ee6e139a17ecb6ee9fad06d8285b9f15",
+  "workingTreeDirty": false,
+  "finishedAtUtc": "2026-10-01T16:17:32.5035861Z",
+  "status": "passed",
+  "suites": [
+    {
+      "suite": "RunInStudio.luau",
+      "status": "passed",
+      "checks": 162,
+      "metrics": null
+    },
+    {
+      "suite": "RunPlayTest.luau",
+      "status": "passed",
+      "checks": 46,
+      "metrics": {
+        "players": 2,
+        "maxControlMs": 0.025299999833805487,
+        "vehicles": 100,
+        "serverOwned": true,
+        "sampleFrames": 83,
+        "p95HeartbeatMs": 61.40918284654617,
+        "meanControlMs": 0.006706024402982544,
+        "meanHeartbeatMs": 37.108928672071684
+      }
+    }
+  ],
+  "error": null
+}
