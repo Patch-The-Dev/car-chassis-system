@@ -1,0 +1,53 @@
+name: Studio runtime checks
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Source checks]
+    branches: [master]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-runtime-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  studio:
+    # Disabled until a dedicated runner is configured. Never execute fork PRs
+    # or manually selected branches other than master on a signed-in machine.
+    if: >-
+      vars.STUDIO_RUNTIME_TESTS == 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'master' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: [self-hosted, Windows, roblox-studio]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned tools
+        uses: paradoxum-games/setup-rokit@29e6ee09651a3711e3a287a1037671d7b74db6d0 # v3
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Run structural and multiplayer Studio suites
+        shell: pwsh
+        run: ./tests/RunStudioTests.ps1 -ReportPath "$env:RUNNER_TEMP/chassis-runtime.json"
+
+      - name: Upload runtime results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chassis-runtime-${{ github.run_id }}
+          path: ${{ runner.temp }}/chassis-runtime.json
+          if-no-files-found: warn

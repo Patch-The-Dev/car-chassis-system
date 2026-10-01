@@ -1,6 +1,7 @@
 param(
     [string]$StudioPath,
-    [ValidateSet('All', 'Structural', 'Integration')][string]$Suite = 'All'
+    [ValidateSet('All', 'Structural', 'Integration')][string]$Suite = 'All',
+    [string]$ReportPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,12 +85,38 @@ function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$M
         }
         throw "Studio did not report a passing result for $RunnerName."
     }
-    $report -split '\r?\n' | Where-Object { $_ -match '^\d+ (passed, 0 failed|integration checks passed)$' -or $_ -eq $Marker } | Select-Object -Last 2
+    $lines = $report -split '\r?\n' | Where-Object { $_ -match '^\d+ (passed, 0 failed|integration checks passed)$' -or $_ -eq $Marker } | Select-Object -Last 2
+    $lines | ForEach-Object { Write-Host $_ }
+    $countLine = $lines | Where-Object { $_ -match '^\d+ ' } | Select-Object -Last 1
+    if (-not $countLine -or $countLine -notmatch '^(\d+) ') { throw 'Studio returned a marker without a check count.' }
+    return [pscustomobject]@{ suite = $RunnerName; status = 'passed'; checks = [int]$Matches[1] }
 }
 
-if ($Suite -in @('All', 'Structural')) {
-    Invoke-StudioCheck 'RunInStudio.luau' 'CarChassisTestReport.log' 'CAR_CHASSIS_TESTS_PASS'
-}
-if ($Suite -in @('All', 'Integration')) {
-    Invoke-StudioCheck 'RunPlayTest.luau' 'CarChassisIntegrationReport.log' 'CAR_CHASSIS_INTEGRATION_PASS'
+$results = [System.Collections.Generic.List[object]]::new()
+$completed = $false
+$failureReason = $null
+try {
+    if ($Suite -in @('All', 'Structural')) {
+        $results.Add((Invoke-StudioCheck 'RunInStudio.luau' 'CarChassisTestReport.log' 'CAR_CHASSIS_TESTS_PASS'))
+    }
+    if ($Suite -in @('All', 'Integration')) {
+        $results.Add((Invoke-StudioCheck 'RunPlayTest.luau' 'CarChassisIntegrationReport.log' 'CAR_CHASSIS_INTEGRATION_PASS'))
+    }
+    $completed = $true
+} catch {
+    $failureReason = $_.Exception.Message
+    throw
+} finally {
+    if ($ReportPath) {
+        $absoluteReport = [System.IO.Path]::GetFullPath($ReportPath)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $absoluteReport) -Force | Out-Null
+        [ordered]@{
+            commit = (git -C $repository rev-parse HEAD)
+            workingTreeDirty = [bool](git -C $repository status --porcelain)
+            finishedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            status = $(if ($completed) { 'passed' } else { 'failed' })
+            suites = @($results.ToArray())
+            error = $failureReason
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $absoluteReport -Encoding utf8
+    }
 }
