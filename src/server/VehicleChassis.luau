@@ -495,7 +495,7 @@ function VehicleChassis.Step(self: Chassis, now: number): ()
 	end
 	local config = self.config
 	local active = self.driver ~= nil and self.lastInput > 0 and now - self.lastInput <= config.InputTimeout
-	if not self.inputDirty and active == self.lastAppliedActive then
+	if not self.inputDirty and active == self.lastAppliedActive and (not active or self.steer == 0) then
 		return
 	end
 	self.inputDirty = false

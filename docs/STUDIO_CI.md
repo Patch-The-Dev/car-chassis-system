@@ -33,4 +33,4 @@ Both suites must emit their success marker and a check count. The multiplayer re
 
 When a suite fails after Studio execution begins, the JSON report records the overall failure and any suites that already passed. Missing prerequisites or a failed Rojo build stop before Studio execution; the Actions step reports the error and may have no JSON artifact.
 
-Local reports include `workingTreeDirty` so results from uncommitted changes are distinguishable from results for a clean checkout. Counts are read from the completed suites, not hard-coded in the workflow.
+Local reports include `workingTreeDirty` so results from uncommitted changes are distinguishable from results for a clean checkout. Counts are read from the completed suites, not hard-coded in the workflow. The multiplayer report also contains its 100-vehicle parked fleet measurements: ownership mode, player and vehicle counts, sampled frames, mean and p95 heartbeat interval, and mean and maximum control-loop time. These are fixture measurements on the runner, not a promised live-server capacity.

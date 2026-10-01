@@ -2,6 +2,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local StudioTestService = game:GetService("StudioTestService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 
 local arguments = StudioTestService:GetTestArgs()
 if typeof(arguments) ~= "table" or arguments.suite ~= "CarChassisIntegration" then
@@ -25,6 +27,8 @@ local registry = ChassisRegistry.new(function(model)
 end)
 local car, serverCar, floor, status, statusConnection
 local replies = {}
+local fleet = {}
+local fleetMetrics
 
 local function check(condition, message)
 	checks += 1
@@ -70,7 +74,7 @@ local success, failure = pcall(function()
 	end)
 	awaitCondition(function()
 		return #Players:GetPlayers() >= 2
-	end, "test players did not join", 45)
+	end, "test players did not join", 75)
 	local player = Players:GetPlayers()[1]
 	awaitCondition(function()
 		return player.Character and player.Character:FindFirstChildOfClass("Humanoid")
@@ -105,6 +109,7 @@ local success, failure = pcall(function()
 		return chassis.throttle == 1 and chassis.lastInput > 0
 	end, "production client input did not reach the server")
 	check(chassis.handbrake == false, "unexpected brake during forward input")
+	check(registry.stepping[car] == chassis, "accepted input did not activate control updates")
 	task.wait(0.5)
 	local startPosition = seat.Position
 	local startForward = seat.CFrame.LookVector
@@ -152,10 +157,16 @@ local success, failure = pcall(function()
 	end, "vehicle did not change into reverse", 10)
 	local reverseStart = seat.Position
 	local reverseForward = seat.CFrame.LookVector
+	local reverseTravel = 0
 	awaitCondition(function()
-		return (seat.Position - reverseStart):Dot(reverseForward) < -5
+		-- Project each displacement onto its current heading. The preceding
+		-- turn can continue rotating the body while the wheels straighten.
+		local position = seat.Position
+		reverseTravel += (position - reverseStart):Dot(reverseForward)
+		reverseStart = position
+		reverseForward = seat.CFrame.LookVector
+		return reverseTravel < -5
 	end, "vehicle did not travel backward", 10)
-	local reverseTravel = (seat.Position - reverseStart):Dot(reverseForward)
 	check(reverseTravel < -5, `vehicle failed to reverse: {reverseTravel} studs`)
 	check(seat.CFrame.UpVector:Dot(Vector3.yAxis) > 0.7, "vehicle became unstable in reverse")
 	phase("neutral")
@@ -168,6 +179,10 @@ local success, failure = pcall(function()
 		return seat.Occupant == nil and chassis.driver == nil
 	end, "leaving the seat did not release the driver")
 	check(chassis.motors.FL.AngularVelocity == 0, "leaving the seat did not neutralize the motors")
+	awaitCondition(function()
+		return registry.stepping[car] == nil
+	end, "parked chassis remained in the control loop")
+	check(registry.stepping[car] == nil, "parked chassis was still scheduled")
 	phase("unbound")
 	phase("unseated")
 	task.wait(0.15)
@@ -250,12 +265,65 @@ local success, failure = pcall(function()
 		return registry:Get(serverCar) == nil
 	end, "server-owned vehicle did not detach")
 	check(serverSeat:GetNetworkOwnershipAuto(), "server-owned teardown did not restore automatic ownership")
+
+	-- Profile a reproducible parked fleet with actual server-owned constraints.
+	-- This records a fixture baseline, not a hardware-independent capacity limit.
+	for index = 1, 100 do
+		local vehicle = Fixture.create()
+		vehicle:PivotTo(
+			vehicle:GetPivot() + Vector3.new((index % 10) * 30 - 135, 0, 150 + math.floor((index - 1) / 10) * 30)
+		)
+		vehicle:SetAttribute("ServerOwned", true)
+		table.insert(fleet, vehicle)
+		CollectionService:AddTag(vehicle, Config.Tag)
+	end
+	awaitCondition(function()
+		for _, vehicle in fleet do
+			if registry:Get(vehicle) == nil then
+				return false
+			end
+		end
+		return true
+	end, "fleet fixtures did not attach", 20)
+	task.wait(1)
+	check(registry:_step(os.clock()) == 0, "parked fleet received control updates")
+	local frames, controlSeconds = {}, 0
+	local largestControl = 0
+	local finishAt = os.clock() + 3
+	repeat
+		local delta = RunService.Heartbeat:Wait()
+		table.insert(frames, delta * 1000)
+		local began = os.clock()
+		registry:_step(began)
+		local duration = os.clock() - began
+		controlSeconds += duration
+		largestControl = math.max(largestControl, duration)
+	until os.clock() >= finishAt
+	local totalFrameMs = 0
+	for _, duration in frames do
+		totalFrameMs += duration
+	end
+	table.sort(frames)
+	fleetMetrics = {
+		vehicles = #fleet,
+		players = #Players:GetPlayers(),
+		serverOwned = true,
+		sampleFrames = #frames,
+		meanHeartbeatMs = totalFrameMs / #frames,
+		p95HeartbeatMs = frames[math.ceil(#frames * 0.95)],
+		meanControlMs = controlSeconds * 1000 / #frames,
+		maxControlMs = largestControl * 1000,
+	}
+	check(#frames > 0 and fleetMetrics.vehicles == 100, "fleet measurement was incomplete")
 end)
 
 if statusConnection then
 	statusConnection:Disconnect()
 end
 registry:Stop()
+for _, vehicle in fleet do
+	vehicle:Destroy()
+end
 for _, instance in { car, serverCar, floor, status } do
 	if instance then
 		instance:Destroy()
@@ -263,6 +331,7 @@ for _, instance in { car, serverCar, floor, status } do
 end
 
 if success then
+	print(`CAR_CHASSIS_METRICS:{arguments.runId}:{HttpService:JSONEncode(fleetMetrics)}`)
 	print(`{checks} integration checks passed`)
 	print("CAR_CHASSIS_INTEGRATION_PASS")
 	print(`CAR_CHASSIS_RESULT:{arguments.runId}:PASS:{checks}`)
@@ -270,4 +339,8 @@ else
 	warn(`CAR_CHASSIS_INTEGRATION_FAILURE: {failure}`)
 	warn(`CAR_CHASSIS_RESULT:{arguments.runId}:FAIL:{failure}`)
 end
-StudioTestService:EndTest({ passed = checks, error = if success then nil else tostring(failure) })
+StudioTestService:EndTest({
+	passed = checks,
+	metrics = fleetMetrics,
+	error = if success then nil else tostring(failure),
+})

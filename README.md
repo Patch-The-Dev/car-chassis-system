@@ -11,6 +11,7 @@ A reusable Roblox chassis for four-wheel vehicle models. The server assembles su
 - Accepts input only from the player occupying that vehicle's drive seat. The server bounds the values, limits request rate, and returns the motors to neutral when input stops.
 - Supports driver-owned or server-owned physics per vehicle, with ownership cleanup on detach.
 - Separates wheels from nearby body parts while retaining collision with the world; distant decorative parts add no wheel collision constraints.
+- Updates only vehicles with active input in the control loop; parked vehicles are removed after neutralization.
 - Handles multiple tagged vehicles, including models moved into or out of `Workspace`, and removes generated parts, constraints, and connections on detach.
 
 The chassis does not depend on a specific car mesh, dashboard, currency system, or game framework. Vehicle art and proportions are supplied by the game using it.
@@ -82,8 +83,8 @@ The runner builds an isolated test place. Its fixture is test data and is exclud
 
 | Suite | Coverage |
 | --- | --- |
-| Structural | Missing and duplicate model parts, invalid tuning, constraint construction, all three drivetrains, handbraking, stale input, recursive tuning isolation, tire properties, Ackermann geometry, ground-speed steering, collision separation, model lifecycle, and teardown. |
-| Integration | Two actual players run the production client. Checks authenticated driving, rejection of another player's controls, forward and reverse movement, right-turn direction, upright stability, vehicle handoff, driver-owned and server-owned physics, handbrake cleanup, and ownership restoration. Controlled-clock checks also verify 60 Hz vehicle acceptance and the separate flood gate with a real seated player. |
+| Structural | Missing and duplicate model parts, invalid tuning, constraint construction, all three drivetrains, handbraking, stale input, recursive tuning isolation, tire properties, Ackermann geometry, ground-speed steering, collision separation, model lifecycle, a 50-vehicle parked scheduling check, and teardown. |
+| Integration | Two actual players run the production client. Checks authenticated driving, rejection of another player's controls, forward and reverse movement, right-turn direction, upright stability, vehicle handoff, driver-owned and server-owned physics, handbrake cleanup, and ownership restoration. Controlled-clock checks also verify 60 Hz vehicle acceptance and the separate flood gate with a real seated player. A 100-vehicle server-owned parked fixture records control-loop and heartbeat timings in the runtime JSON report. |
 
 [Source checks](.github/workflows/ci.yml) run formatting, lint, all runtime source with Luau analysis, and both Rojo builds in GitHub Actions. The optional [Studio runtime workflow](.github/workflows/studio.yml) executes both suites on a dedicated Windows runner and uploads their results. It is disabled until that runner is configured and explicitly enabled. See [Studio CI setup and execution rules](docs/STUDIO_CI.md).
 
@@ -94,6 +95,16 @@ The server owns model assembly and accepts input only from the current seat occu
 For driver-owned physics, games must validate movement-based rewards and competitive outcomes separately. The motor speed settings control normal driving and are not an anti-cheat boundary. See [Roblox's ownership guidance](https://create.roblox.com/docs/physics/network-ownership). This package contains no reward or persistence logic.
 
 Suspension, torque, and steering values in `ChassisConfig` are starting values. `ConfigCopy.copy()` creates independent tuning, including both suspension tables. Pass it to `VehicleChassis.new(model, config)` for direct construction, or supply a per-model resolver to `ChassisRegistry.new()` for tagged vehicles. Each controller takes an immutable snapshot. See the [tuning example](docs/VEHICLE_CONTRACT.md#per-vehicle-configuration).
+
+## Control-loop performance
+
+The registry keeps attachment tracking separate from the vehicles scheduled for control updates. Accepted driver input wakes a vehicle. Input expiry or driver departure neutralizes it and removes it from the scheduled set. A structural test attaches 50 parked vehicles and verifies that the control loop processes none of them. Multiplayer checks verify wake-up and removal with an actual driver.
+
+Active steering refreshes its speed-dependent angle each heartbeat, even between input packets. Constraint properties are written only when their values change. The `CarChassis.ControlStep` MicroProfiler marker isolates registry control work from Roblox physics.
+
+The multiplayer suite also creates 100 server-owned parked vehicles, samples their server heartbeat and control-loop timing, and saves the measurements in its JSON report. These are measurements of the test fixture on the executing machine.
+
+For a fleet capacity test, profile the target vehicle assets in Studio's server view with both parked and occupied vehicles. Compare control-loop time, physics time, network traffic, and frame time under the intended ownership mode. The 50-vehicle check proves scheduling behavior; actual capacity also depends on part count, constraint count, collision geometry, ownership, and hardware.
 
 Drive and braking torque are capped by vehicle mass and wheel radius as well as the configured torque ceilings. Steering uses horizontal forward speed, so vertical falls and sideways slides do not reduce its angle. Ackermann geometry uses measured wheelbase and front track width while keeping both hinges within the configured limit. Tire friction, elasticity, and surface weighting are configurable, and springs have a finite force limit.
 

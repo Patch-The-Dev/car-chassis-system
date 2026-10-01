@@ -12,6 +12,7 @@ type ConfigResolver = (Model) -> typeof(Config)?
 type State = {
 	configResolver: ConfigResolver?,
 	active: { [Model]: VehicleChassis.Chassis },
+	stepping: { [Model]: VehicleChassis.Chassis },
 	watchers: { [Model]: { RBXScriptConnection } },
 	retryWatchers: { [Model]: RBXScriptConnection },
 	attaching: { [Model]: boolean },
@@ -51,6 +52,7 @@ function ChassisRegistry.new(configResolver: ConfigResolver?): Registry
 		{
 			configResolver = configResolver,
 			active = {},
+			stepping = {},
 			watchers = {},
 			retryWatchers = {},
 			attaching = {},
@@ -67,6 +69,7 @@ function ChassisRegistry.Get(self: Registry, model: Model): VehicleChassis.Chass
 end
 
 function ChassisRegistry._detach(self: Registry, model: Model): ()
+	self.stepping[model] = nil
 	local chassis = self.active[model]
 	if chassis then
 		self.active[model] = nil
@@ -192,7 +195,25 @@ function ChassisRegistry._receiveInput(
 		return false
 	end
 	local chassis = self.active[model]
-	return if chassis then chassis:ApplyInput(player, throttle, steer, brake, now) else false
+	if chassis and chassis:ApplyInput(player, throttle, steer, brake, now) then
+		self.stepping[model] = chassis
+		return true
+	end
+	return false
+end
+
+function ChassisRegistry._step(self: Registry, now: number): number
+	debug.profilebegin("CarChassis.ControlStep")
+	local processed = 0
+	for model, chassis in self.stepping do
+		chassis:Step(now)
+		processed += 1
+		if not chassis.lastAppliedActive then
+			self.stepping[model] = nil
+		end
+	end
+	debug.profileend()
+	return processed
 end
 
 function ChassisRegistry.Start(self: Registry): ()
@@ -240,10 +261,7 @@ function ChassisRegistry.Start(self: Registry): ()
 	table.insert(
 		self.connections,
 		RunService.Heartbeat:Connect(function()
-			local now = os.clock()
-			for _, chassis in self.active do
-				chassis:Step(now)
-			end
+			self:_step(os.clock())
 		end)
 	)
 end
@@ -269,6 +287,7 @@ function ChassisRegistry.Stop(self: Registry): ()
 		self:_forget(model)
 	end
 	table.clear(self.lastRemoteInput)
+	table.clear(self.stepping)
 end
 
 return ChassisRegistry

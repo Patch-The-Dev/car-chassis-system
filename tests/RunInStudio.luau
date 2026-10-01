@@ -296,6 +296,25 @@ local registry = ChassisRegistry.new(function(model)
 end)
 registry:Start()
 registry:Start()
+local parked = {}
+for index = 1, 50 do
+	local model = Fixture.create()
+	model:PivotTo(CFrame.new(index * 20, 5, 100))
+	CollectionService:AddTag(model, Config.Tag)
+	table.insert(parked, model)
+end
+eventually(function()
+	for _, model in parked do
+		if registry:Get(model) == nil then
+			return false
+		end
+	end
+	return true
+end, "parked fleet attaches")
+check(registry:_step(os.clock()) == 0, "parked vehicles do not run per-frame controller work")
+for _, model in parked do
+	model:Destroy()
+end
 check(shared.Remotes.Input:IsA("RemoteEvent"), "namespaced input remote is installed")
 local live = Fixture.create()
 CollectionService:AddTag(live, Config.Tag)
@@ -352,6 +371,7 @@ eventually(function()
 	return registry:Get(disposable) == nil and registry.watchers[disposable] == nil
 end, "destroyed tagged model releases its watcher")
 registry:Stop()
+check(next(registry.stepping) == nil, "stopping the registry clears the control update set")
 check(registry:Get(second) == nil and registry:Get(waiting) == nil, "registry stop detaches every vehicle")
 local reusedRemote = shared.Remotes.Input
 local restartedRegistry = ChassisRegistry.new()

@@ -6,12 +6,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot
-$place = Join-Path $env:TEMP 'CarChassisTestPlace.rbxlx'
-$rojo = (Get-Command rojo -ErrorAction SilentlyContinue).Source
-if (-not $rojo) {
-    $rojo = Join-Path $env:USERPROFILE '.rokit\tool-storage\rojo-rbx\rojo\7.7.0\rojo.exe'
-}
-if (-not (Test-Path -LiteralPath $rojo)) {
+$invocation = [guid]::NewGuid().ToString('N')
+$place = Join-Path $env:TEMP "CarChassis-$invocation.rbxlx"
+$rojo = Join-Path $env:USERPROFILE '.rokit\tool-storage\rojo-rbx\rojo\7.7.0\rojo.exe'
+if (-not (Test-Path -LiteralPath $rojo)) { $rojo = (Get-Command rojo -ErrorAction SilentlyContinue).Source }
+if (-not $rojo -or -not (Test-Path -LiteralPath $rojo)) {
     throw 'Rojo was not found. Install the pinned tools with rokit install.'
 }
 if (-not $StudioPath) {
@@ -32,8 +31,8 @@ try {
 }
 
 function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$Marker) {
-    $output = Join-Path $env:TEMP $ReportName
-    $consoleOutput = Join-Path $env:TEMP ($ReportName + '.console.log')
+    $output = Join-Path $env:TEMP ($invocation + '-' + $ReportName)
+    $consoleOutput = $output + '.console.log'
     Remove-Item -LiteralPath $output -ErrorAction SilentlyContinue
     $runner = Join-Path $PSScriptRoot $RunnerName
     $arguments = '--task RunScript --localPlaceFile "{0}" --runScriptFile "{1}" --outputFile "{2}" --quitAfterExecution' -f $place, $runner, $output
@@ -41,6 +40,7 @@ function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$M
     $startedAt = Get-Date
     $deadline = (Get-Date).AddSeconds(180)
     $report = ''
+    $runtimeMetrics = $null
     $markerPattern = '(?m)^' + [regex]::Escape($Marker) + '\s*$'
     while ((Get-Date) -lt $deadline) {
         $report = ''
@@ -64,6 +64,9 @@ function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$M
                 if ($resultLine -and $resultLine.Line -match $resultPattern) {
                     if ($Matches[1] -eq 'PASS') {
                         $report += "`n$($Matches[2]) integration checks passed`n$Marker`n"
+                        $metricsPattern = 'CAR_CHASSIS_METRICS:' + [regex]::Escape($runId) + ':(.+)$'
+                        $metricsLine = Select-String -LiteralPath $log.FullName -Pattern $metricsPattern -ErrorAction SilentlyContinue | Select-Object -Last 1
+                        if ($metricsLine -and $metricsLine.Line -match $metricsPattern) { $runtimeMetrics = $Matches[1] | ConvertFrom-Json }
                     } else {
                         $report += "`nCAR_CHASSIS_INTEGRATION_FAILURE: $($Matches[2])`n"
                     }
@@ -81,7 +84,7 @@ function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$M
         $process.Refresh()
         if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
         if ($report) {
-            $report -split '\r?\n' | Where-Object { $_ -match '^CAR_CHASSIS_INTEGRATION_FAILURE:|^RunScript:\d+:|^Stack (Begin|End)|^Script .*Line' }
+            $report -split '\r?\n' | Where-Object { $_ -match '^CAR_CHASSIS_INTEGRATION_FAILURE:|^RunScript:\d+:|^Stack (Begin|End)|^Script .*Line' } | ForEach-Object { Write-Host $_ }
         }
         throw "Studio did not report a passing result for $RunnerName."
     }
@@ -89,7 +92,13 @@ function Invoke-StudioCheck([string]$RunnerName, [string]$ReportName, [string]$M
     $lines | ForEach-Object { Write-Host $_ }
     $countLine = $lines | Where-Object { $_ -match '^\d+ ' } | Select-Object -Last 1
     if (-not $countLine -or $countLine -notmatch '^(\d+) ') { throw 'Studio returned a marker without a check count.' }
-    return [pscustomobject]@{ suite = $RunnerName; status = 'passed'; checks = [int]$Matches[1] }
+    $checks = [int]$Matches[1]
+    if ($RunnerName -eq 'RunPlayTest.luau' -and $runtimeMetrics -eq $null) {
+        $metricsPattern = '(?m)^CAR_CHASSIS_METRICS:' + [regex]::Escape($runId) + ':(.+)$'
+        if ($report -match $metricsPattern) { $runtimeMetrics = $Matches[1] | ConvertFrom-Json }
+        if ($runtimeMetrics -eq $null) { throw 'Multiplayer suite returned no fleet measurement.' }
+    }
+    return [pscustomobject]@{ suite = $RunnerName; status = 'passed'; checks = $checks; metrics = $runtimeMetrics }
 }
 
 $results = [System.Collections.Generic.List[object]]::new()
